@@ -145,11 +145,14 @@ def auto_trim(img: Image.Image, margin: int = 30) -> Image.Image:
     return img.crop((left, top, right, bottom))
 
 
-def pil_to_base64(img: Image.Image) -> tuple[str, str]:
-    """PIL Image → base64"""
+def pil_to_base64(img: Image.Image, max_px: int = 1600) -> tuple[str, str]:
+    """PIL Image → base64（大きすぎる画像は縮小してAPIエラーを防ぐ）"""
+    # スマホ写真は4000px超になることがあるため最大 max_px にリサイズ
+    if img.width > max_px or img.height > max_px:
+        img.thumbnail((max_px, max_px), Image.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return base64.standard_b64encode(buf.getvalue()).decode("utf-8"), "image/png"
+    img.save(buf, format="JPEG", quality=88)
+    return base64.standard_b64encode(buf.getvalue()).decode("utf-8"), "image/jpeg"
 
 
 EXTRACTION_PROMPT = """
@@ -202,9 +205,15 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
             {"type": "text", "text": EXTRACTION_PROMPT}
         ]}]
     )
-    text  = message.content[0].text.strip()
+    text = message.content[0].text.strip()
+    # ```json ... ``` や ``` ... ``` のコードブロックを除去
+    text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\s*```$', '', text, flags=re.MULTILINE)
+    text = text.strip()
+    # { ... } の部分だけ抽出（前後に余分な文字があっても安全に処理）
     match = re.search(r'\{.*\}', text, re.DOTALL)
-    return json.loads(match.group() if match else text)
+    raw = match.group() if match else text
+    return json.loads(raw)
 
 
 def get_demo_data() -> dict:
@@ -458,8 +467,20 @@ if convert_btn and img_data:
             st.session_state["extracted"]  = extracted
             st.session_state["pptx_bytes"] = generate_pptx(extracted)
         except Exception as e:
-            st.error(f"❌ エラーが発生しました: {e}")
-            st.info("もう一度お試しいただくか、「サンプルで試してみる」をご利用ください。")
+            err_msg = str(e)
+            if "api_key" in err_msg.lower() or "authentication" in err_msg.lower() or "401" in err_msg:
+                st.error("❌ APIキーが正しくありません。左上のメニューから確認してください。")
+            elif "model" in err_msg.lower() or "invalid" in err_msg.lower():
+                st.error(f"❌ モデルエラー: {err_msg}")
+            elif "JSONDecodeError" in type(e).__name__ or "json" in err_msg.lower():
+                st.error("❌ AIの返答を解析できませんでした。もう一度お試しください。")
+            elif "timeout" in err_msg.lower() or "connection" in err_msg.lower():
+                st.error("❌ 通信エラーが発生しました。インターネット接続を確認してください。")
+            elif "overloaded" in err_msg.lower() or "529" in err_msg:
+                st.error("❌ AIサーバーが混み合っています。しばらく待ってから再度お試しください。")
+            else:
+                st.error(f"❌ エラーが発生しました: {err_msg}")
+            st.info("💡 解決しない場合は「サンプルで試してみる」でアプリの動作確認ができます。")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # STEP 3 ── ダウンロード
