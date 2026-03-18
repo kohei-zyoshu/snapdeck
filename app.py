@@ -261,32 +261,46 @@ def fix_orientation(img: Image.Image) -> Image.Image:
 
 
 def deskew_image(img: Image.Image) -> Image.Image:
-    """投影プロファイル法で傾きを検出・補正する（numpy高速版）"""
+    """投影プロファイル法で傾きを検出・補正する（2段階高精度版）"""
     try:
-        # 400px縮小版で角度検出（高速化）
+        # 500px縮小版で角度検出（精度と速度のバランス）
         thumb = img.copy()
-        thumb.thumbnail((400, 400), Image.LANCZOS)
+        thumb.thumbnail((500, 500), Image.LANCZOS)
         gray   = np.array(thumb.convert("L"), dtype=np.float32)
-        binary = (gray < 128).astype(np.float32)
+        # 適応的2値化：中央値を閾値にして照明ムラに強くする
+        thresh = float(np.median(gray)) * 0.75
+        binary = (gray < thresh).astype(np.float32)
         h, w   = binary.shape
         ys     = np.arange(h, dtype=np.float32)
         xs     = np.arange(w, dtype=np.float32)
 
-        best_angle = 0.0
-        best_score = -1.0
-        for angle in np.arange(-10, 10.5, 1.0):   # 1°刻みで高速探索
-            rad = math.radians(angle)
-            ny  = (ys[:, None] * math.cos(rad)
-                   - xs[None, :] * math.sin(rad))
+        def projection_score(angle: float) -> float:
+            rad    = math.radians(angle)
+            ny     = ys[:, None] * math.cos(rad) - xs[None, :] * math.sin(rad)
             ny_int = np.clip(ny.astype(np.int32) + w, 0, h + w - 1)
             proj   = np.bincount(ny_int[binary > 0].ravel(), minlength=h + w)
-            score  = float(np.var(proj))
+            return float(np.var(proj))
+
+        # ── 第1段階：±15° を 1° 刻みで粗探索 ──
+        best_angle = 0.0
+        best_score = -1.0
+        for angle in np.arange(-15, 15.5, 1.0):
+            score = projection_score(float(angle))
             if score > best_score:
                 best_score = score
-                best_angle = angle
+                best_angle = float(angle)
 
-        if abs(best_angle) > 0.5:
-            img = img.rotate(-best_angle, expand=True,
+        # ── 第2段階：粗探索結果の ±1.5° を 0.1° 刻みで精密探索 ──
+        fine_best  = best_angle
+        fine_score = best_score
+        for angle in np.arange(best_angle - 1.5, best_angle + 1.6, 0.1):
+            score = projection_score(float(angle))
+            if score > fine_score:
+                fine_score = score
+                fine_best  = float(angle)
+
+        if abs(fine_best) > 0.3:   # 0.3°以上の傾きを補正
+            img = img.rotate(-fine_best, expand=True,
                              fillcolor=(255, 255, 255), resample=Image.BICUBIC)
     except Exception:
         pass
