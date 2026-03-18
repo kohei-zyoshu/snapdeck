@@ -558,16 +558,36 @@ if demo_btn:
 
 if convert_btn and img_data:
     st.session_state["is_demo"] = False
-    with st.spinner("AIが文字を読み取っています… しばらくお待ちください（約10〜20秒）"):
-        try:
-            api_key = get_api_key()
-            if not api_key:
-                st.warning("認証キーが設定されていません。左上のメニューから設定してください。")
-                st.stop()
-            extracted = analyze_with_claude(img_data, media_type, api_key)
-            st.session_state["extracted"]  = extracted
-            st.session_state["pptx_bytes"] = generate_pptx(extracted)
-        except Exception as e:
+    try:
+        api_key = get_api_key()
+        if not api_key:
+            st.warning("認証キーが設定されていません。左上のメニューから設定してください。")
+            st.stop()
+
+        status_text = st.empty()
+        progress_bar = st.progress(0)
+
+        status_text.markdown("**① 写真を準備しています…**")
+        progress_bar.progress(15)
+
+        status_text.markdown("**② AIに写真を送っています…**")
+        progress_bar.progress(35)
+
+        extracted = analyze_with_claude(img_data, media_type, api_key)
+
+        status_text.markdown("**③ 文字の読み取りが完了しました ✅**")
+        progress_bar.progress(75)
+
+        status_text.markdown("**④ スライドを作成しています…**")
+        progress_bar.progress(90)
+
+        st.session_state["extracted"]  = extracted
+        st.session_state["pptx_bytes"] = generate_pptx(extracted)
+
+        progress_bar.progress(100)
+        status_text.markdown("**✅ 完了しました！下にスクロールして保存してください。**")
+
+    except Exception as e:
             err_msg = str(e)
             if "api_key" in err_msg.lower() or "authentication" in err_msg.lower() or "401" in err_msg:
                 st.error("認証キーが正しくありません。左上のメニューから確認してください。")
