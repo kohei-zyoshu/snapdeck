@@ -678,8 +678,7 @@ def generate_pptx(data: dict) -> bytes:
 # ── ロゴ・説明 ──
 st.markdown("""
 <div class='logo'>パシャッ<em>と</em></div>
-<div class='tagline'>写真を撮るだけで、スライドに変わります</div>
-<div class='sub-tagline'>ホワイトボードや手書きメモを撮影 → AIが文字を読み取り → パワーポイントで保存</div>
+<div class='tagline'>メモの写真を、スライドに変換します</div>
 """, unsafe_allow_html=True)
 
 # ── APIキー入力（未設定時のみサイドバーに表示） ──
@@ -701,17 +700,10 @@ if not get_api_key():
 # ステップ１　写真を用意する
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 st.markdown(
-    "<div class='step'><span class='snum'>１</span>写真を用意する</div>",
+    "<div class='step'><span class='snum'>１</span>写真を選ぶ</div>",
     unsafe_allow_html=True)
 st.markdown(
-    "<div class='hint'>"
-    "ホワイトボードや手書きメモを、<strong>正面からまっすぐ</strong>撮影してください。<br>"
-    "文字が大きくはっきり写っていると、より正確に読み取れます。"
-    "</div>",
-    unsafe_allow_html=True)
-
-st.markdown(
-    "<div class='guide-box'>📱 スマートフォンで撮影した写真や、カメラロールにある画像を選べます。</div>",
+    "<div class='hint'>ホワイトボードや手書きメモを、<strong>正面から</strong>撮った写真を選んでください。</div>",
     unsafe_allow_html=True)
 uploaded_file = st.file_uploader(
     "画像ファイルを選ぶ",
@@ -737,14 +729,13 @@ if raw_input:
     st.markdown("---")
 
     do_trim = st.toggle(
-        "✂️　余白を自動でカットして、文字を読み取りやすくする（おすすめ）",
+        "✂️　余白を自動でカット（おすすめ）",
         value=True,
-        help="写真の周囲にある白い余白や余分な部分を自動で除去します。傾き補正・天地補正も同時に行います。",
+        help="余白を除去して読み取り精度を上げます。傾き・天地も自動補正します。",
     )
 
-    # EXIF天地補正 → トリミング → 傾き補正 → プレビュー
     display_img = preprocess_image(pil_image, do_trim=do_trim)
-    st.image(display_img, caption="この写真を変換します（天地・傾き補正済み）", use_container_width=True)
+    st.image(display_img, caption="変換する写真", use_container_width=True)
 
     img_data, media_type = pil_to_base64(display_img)
 
@@ -753,7 +744,7 @@ if raw_input:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 st.markdown("---")
 st.markdown(
-    "<div class='step'><span class='snum'>２</span>スライドに変換する</div>",
+    "<div class='step'><span class='snum'>２</span>変換する</div>",
     unsafe_allow_html=True)
 
 can_convert = bool(raw_input)
@@ -761,25 +752,25 @@ can_convert = bool(raw_input)
 if not can_convert:
     st.markdown(
         "<div class='hint' style='border-color:#F5A623; background:#FFF8E7;'>"
-        "↑ まず上の「ステップ１」で写真を撮るか選んでください。"
+        "↑ まず写真を選んでください。"
         "</div>",
         unsafe_allow_html=True)
 
 convert_btn = st.button(
-    "✨　この写真をスライドに変換する",
+    "✨　スライドに変換する",
     type="primary",
     use_container_width=True,
     disabled=not can_convert,
 )
 
 st.markdown(
-    "<p style='text-align:center; color:#7A9AAD; font-size:1.05rem; margin:1rem 0 0.5rem;'>"
+    "<p style='text-align:center; color:#7A9AAD; font-size:1.05rem; margin:0.8rem 0 0.4rem;'>"
     "— または —"
     "</p>",
     unsafe_allow_html=True)
 
 demo_btn = st.button(
-    "🎯　写真なしで動きを確認してみる（サンプル）",
+    "🎯　サンプルで試す",
     use_container_width=True,
 )
 
@@ -847,38 +838,30 @@ if "extracted" in st.session_state:
 
     st.markdown("---")
     st.markdown(
-        "<div class='step'><span class='snum'>３</span>スライドを保存する</div>",
+        "<div class='step'><span class='snum'>３</span>保存する</div>",
         unsafe_allow_html=True)
 
-    el_count  = len(extracted.get("elements", []))
-    grp_count = len(extracted.get("structure", {}).get("groups", []))
-    demo_note = "（サンプルデータ）" if is_demo else ""
+    el_count = len(extracted.get("elements", []))
+    demo_note = "（サンプル）" if is_demo else ""
 
     st.markdown(f"""
 <div class='done-box'>
-完了しました{demo_note}<br>
-読み取った項目：<strong>{el_count} 件</strong>　グループ：<strong>{grp_count} 件</strong>
+✅ 完了{demo_note}　読み取り：<strong>{el_count} 件</strong>
 </div>
 """, unsafe_allow_html=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if pptx_bytes:
-        st.markdown(
-            "<div class='hint' style='background:#EBF9F3; border-color:#10B981;'>"
-            "⬇️　下のボタンを押すと、パワーポイントファイルが保存されます。"
-            "</div>",
-            unsafe_allow_html=True)
         st.download_button(
-            label="💾　パワーポイントとして保存する",
+            label="💾　パワーポイントで保存する",
             data=pptx_bytes,
             file_name=f"パシャッと_{ts}.pptx",
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             use_container_width=True,
         )
 
-    # 読み取り結果の確認（折りたたみ）
-    with st.expander("📋　読み取った文字の内容を確認する"):
+    with st.expander("📋　読み取り内容を確認する"):
         elmap = {el["id"]: el for el in extracted.get("elements", [])}
         for group in extracted.get("structure", {}).get("groups", []):
             st.markdown(f"**{group.get('label', 'グループ')}**")
@@ -899,7 +882,7 @@ if "extracted" in st.session_state:
             ensure_ascii=False, indent=2
         )
         st.download_button(
-            label="📄　テキストデータとして保存する",
+            label="📄　テキストで保存する",
             data=json_str,
             file_name=f"パシャッと_テキスト_{ts}.json",
             mime="application/json",
