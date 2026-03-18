@@ -317,12 +317,13 @@ def enhance_for_ocr(img: Image.Image) -> Image.Image:
     return img
 
 
-def preprocess_image(img: Image.Image, do_trim: bool = True) -> Image.Image:
+def preprocess_image(img: Image.Image, do_trim: bool = True, do_deskew: bool = True) -> Image.Image:
     """全前処理をまとめて実行: EXIF回転 → トリミング → デスキュー → 画質強化"""
     img = fix_orientation(img)
     if do_trim:
         img = auto_trim(img)
-    img = deskew_image(img)
+    if do_deskew:
+        img = deskew_image(img)
     return img
 
 
@@ -350,14 +351,22 @@ EXTRACTION_PROMPT = """画像（ホワイトボード・手書きメモ）を解
 - 必ず { で始まり } で終わる純粋なJSONのみ返すこと"""
 
 
-@st.cache_data(show_spinner=False)
+SYSTEM_PROMPT = (
+    "You are a JSON extraction engine. "
+    "You must always respond with a single valid JSON object and absolutely nothing else. "
+    "Do not include any explanation, markdown formatting, code fences, or commentary. "
+    "Start your response with { and end with }."
+)
+
+
 def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
-    """AIで画像を解析（同じ画像は再利用）"""
+    """AIで画像を解析"""
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model="claude-opus-4-6",
         max_tokens=4096,
+        system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {
                 "type": "base64", "media_type": media_type, "data": img_data
@@ -367,7 +376,7 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     )
     text = message.content[0].text.strip()
 
-    # ① コードブロックを除去
+    # ① コードブロックを除去（念のため）
     text = re.sub(r'```(?:json)?\s*', '', text)
     text = re.sub(r'```', '', text).strip()
 
@@ -376,8 +385,10 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     end   = text.rfind('}')
     if start != -1 and end != -1 and end > start:
         text = text[start:end+1]
+    else:
+        raise ValueError(f"AIの応答にJSONが含まれていません。応答内容：{text[:300]}")
 
-    # ③ JSONパース（失敗したら最低限のデータを返す）
+    # ③ JSONパース
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -386,7 +397,7 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
         try:
             return json.loads(text_clean)
         except json.JSONDecodeError as e:
-            raise ValueError(f"JSONの解析に失敗しました: {e}\n応答の先頭: {text[:200]}")
+            raise ValueError(f"JSONの解析に失敗しました: {e}\n応答の先頭: {text[:300]}")
 
 
 def get_demo_data() -> dict:
@@ -690,10 +701,15 @@ if raw_input:
     do_trim = st.toggle(
         "✂️　余白を自動でカット（おすすめ）",
         value=True,
-        help="余白を除去して読み取り精度を上げます。傾き・天地も自動補正します。",
+        help="余白を除去して読み取り精度を上げます。",
+    )
+    do_deskew = st.toggle(
+        "📐　傾き補正（写真が斜めのとき）",
+        value=True,
+        help="写真の傾きを自動で検出して補正します。正面から撮った写真には不要な場合があります。",
     )
 
-    display_img = preprocess_image(pil_image, do_trim=do_trim)
+    display_img = preprocess_image(pil_image, do_trim=do_trim, do_deskew=do_deskew)
     st.image(display_img, caption="変換する写真", use_container_width=True)
 
     img_data, media_type = pil_to_base64(display_img)
@@ -768,8 +784,8 @@ if convert_btn and img_data:
             err_msg = str(e)
             if "api_key" in err_msg.lower() or "authentication" in err_msg.lower() or "401" in err_msg:
                 st.error("認証キーが正しくありません。左上のメニューから確認してください。")
-            elif "JSONDecodeError" in type(e).__name__ or "json" in err_msg.lower():
-                st.error("文字の読み取り結果を処理できませんでした。もう一度お試しください。")
+            elif "JSONDecodeError" in type(e).__name__ or "json" in err_msg.lower() or "JSON" in err_msg or "応答" in err_msg:
+                st.error(f"文字の読み取り結果を処理できませんでした。もう一度お試しください。\n（詳細：{err_msg[:200]}）")
             elif "timeout" in err_msg.lower() or "connection" in err_msg.lower():
                 st.error("通信エラーが発生しました。インターネット接続をご確認のうえ、もう一度お試しください。")
             elif "overloaded" in err_msg.lower() or "529" in err_msg:
