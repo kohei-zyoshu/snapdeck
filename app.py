@@ -261,15 +261,14 @@ def fix_orientation(img: Image.Image) -> Image.Image:
 
 
 def deskew_image(img: Image.Image) -> Image.Image:
-    """投影プロファイル法で傾きを検出・補正する（2段階高精度版）"""
+    """投影プロファイル法で傾きを検出・補正する（誤検知防止版）"""
     try:
-        # 500px縮小版で角度検出（精度と速度のバランス）
+        # 400px縮小版で角度検出
         thumb = img.copy()
-        thumb.thumbnail((500, 500), Image.LANCZOS)
+        thumb.thumbnail((400, 400), Image.LANCZOS)
         gray   = np.array(thumb.convert("L"), dtype=np.float32)
-        # 適応的2値化：中央値を閾値にして照明ムラに強くする
-        thresh = float(np.median(gray)) * 0.75
-        binary = (gray < thresh).astype(np.float32)
+        # 固定閾値128で2値化（安定性重視）
+        binary = (gray < 128).astype(np.float32)
         h, w   = binary.shape
         ys     = np.arange(h, dtype=np.float32)
         xs     = np.arange(w, dtype=np.float32)
@@ -281,14 +280,21 @@ def deskew_image(img: Image.Image) -> Image.Image:
             proj   = np.bincount(ny_int[binary > 0].ravel(), minlength=h + w)
             return float(np.var(proj))
 
+        # 0°（傾きなし）のベーススコアを計算
+        base_score = projection_score(0.0)
+
         # ── 第1段階：±15° を 1° 刻みで粗探索 ──
         best_angle = 0.0
-        best_score = -1.0
+        best_score = base_score
         for angle in np.arange(-15, 15.5, 1.0):
             score = projection_score(float(angle))
             if score > best_score:
                 best_score = score
                 best_angle = float(angle)
+
+        # ── 改善率が15%未満なら補正しない（誤検知防止） ──
+        if base_score > 0 and (best_score - base_score) / base_score < 0.15:
+            return img
 
         # ── 第2段階：粗探索結果の ±1.5° を 0.1° 刻みで精密探索 ──
         fine_best  = best_angle
@@ -299,7 +305,8 @@ def deskew_image(img: Image.Image) -> Image.Image:
                 fine_score = score
                 fine_best  = float(angle)
 
-        if abs(fine_best) > 0.3:   # 0.3°以上の傾きを補正
+        # 1°以上の傾きが検出された場合のみ補正
+        if abs(fine_best) >= 1.0:
             img = img.rotate(-fine_best, expand=True,
                              fillcolor=(255, 255, 255), resample=Image.BICUBIC)
     except Exception:
