@@ -7,7 +7,7 @@ import os, io, json, base64, re
 from datetime import datetime
 
 import streamlit as st
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageEnhance, ImageFilter
 
 # ─── ページ設定 ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -254,47 +254,68 @@ def auto_trim(img: Image.Image, margin: int = 30) -> Image.Image:
     return img.crop((left, top, right, bottom))
 
 
-def pil_to_base64(img: Image.Image, max_px: int = 1600) -> tuple[str, str]:
-    """PIL Image → base64（大きすぎる画像は縮小してエラーを防ぐ）"""
+def enhance_for_ocr(img: Image.Image) -> Image.Image:
+    """OCR精度を上げるための画像前処理（コントラスト・シャープネス強化）"""
+    # コントラスト強化
+    img = ImageEnhance.Contrast(img).enhance(1.5)
+    # シャープネス強化
+    img = ImageEnhance.Sharpness(img).enhance(2.0)
+    # 明るさを微調整（暗すぎる写真を補正）
+    img = ImageEnhance.Brightness(img).enhance(1.1)
+    return img
+
+
+def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
+    """PIL Image → base64（高解像度維持・OCR前処理済み）"""
+    # OCR精度向上のための前処理
+    img = enhance_for_ocr(img)
+    # 大きすぎる画像は縮小（API上限対策）
     if img.width > max_px or img.height > max_px:
         img.thumbnail((max_px, max_px), Image.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=88)
+    img.save(buf, format="JPEG", quality=92)
     return base64.standard_b64encode(buf.getvalue()).decode("utf-8"), "image/jpeg"
 
 
 EXTRACTION_PROMPT = """
-あなたは画像解析の専門家です。与えられた画像（ホワイトボードや手書きメモ）を分析し、
-以下のJSON形式で情報を抽出してください。
+あなたはOCRと文書構造解析の専門家です。
+添付の画像（ホワイトボード・手書きメモ・印刷物など）を注意深く分析し、
+すべての文字・記号・数字を漏れなく読み取ってください。
 
-出力するJSONの形式:
+【重要な読み取りルール】
+- かすれた文字、薄い文字も最大限推測して読み取ること
+- 矢印（→ ← ↑ ↓）、丸囲み、下線なども構造の手がかりとして活用すること
+- 誤字と思われる文字もそのまま記録すること
+- 日本語・英語・数字・記号を問わず、すべて抽出すること
+- 画像の端や隅に小さく書かれた文字も見落とさないこと
+
+以下のJSON形式のみで返答してください（説明文・前置き・コードブロック不要）:
+
 {
-  "title": "メモ全体のタイトルまたは主題（推定）",
+  "title": "メモ全体のタイトルまたは主題（画像から推定）",
   "elements": [
     {
       "id": "el_001",
-      "type": "text|heading|bullet|table_row",
-      "content": "テキスト内容",
+      "type": "heading",
+      "content": "読み取ったテキスト",
       "level": 1,
       "confidence": 0.95
     }
   ],
   "structure": {
-    "type": "list|flow|table|freeform",
+    "type": "list",
     "groups": [
       {
-        "label": "グループ名（推定）",
+        "label": "グループ名",
         "items": ["el_001", "el_002"]
       }
     ]
   },
-  "language": "ja|en|mixed",
-  "notes": "補足コメント"
+  "language": "ja",
+  "notes": "読み取れなかった箇所や補足があれば記載"
 }
 
-ルール:
-- 読み取れるテキストはすべて抽出してください
-- JSONのみを返してください（説明文は不要）
+typeは heading（大見出し）/ bullet（箇条書き）/ text（通常テキスト）/ table_row（表の行）のいずれか。
 """
 
 
@@ -304,7 +325,7 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-opus-4-6",
         max_tokens=4096,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {
@@ -391,45 +412,70 @@ def generate_pptx(data: dict) -> bytes:
         r.font.size = Pt(size); r.font.bold = bold
         r.font.color.rgb = color; r.font.name = "Arial"
 
-    # タイトルスライド
+    # ── 1枚のスライドに全内容を集約 ──
     s = prs.slides.add_slide(blank)
     bg(s, C_DARK)
-    rect(s, 0, 0, 0.08, 7.5, C_ACCENT)
+
+    # 上部アクセントライン
+    rect(s, 0, 0, 13.33, 0.07, C_ACCENT)
+
+    # タイトル
     title = data.get("title", "ホワイトボードメモ")
-    txt(s, title,              0.3, 1.2, 12.7, 1.6, size=40, bold=True)
-    txt(s, "パシャッと 自動変換", 0.3, 2.9,  8.0, 0.6, size=18, color=C_ACCENT)
+    txt(s, title, 0.4, 0.12, 12.5, 0.75, size=26, bold=True)
+
+    # 日時ラベル
     ts = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-    txt(s, f"変換日時：{ts}",   0.3, 3.6,  8.0, 0.5, size=13, color=C_MUTED)
-    if data.get("notes"):
-        txt(s, f"メモ：{data['notes']}", 0.3, 6.7, 12.7, 0.55, size=11, color=C_MUTED)
+    txt(s, f"変換日時：{ts}", 0.4, 0.82, 8.0, 0.35, size=10, color=C_MUTED)
 
-    # グループ別スライド
-    elements_by_id = {el["id"]: el for el in data.get("elements", [])}
+    # コンテンツ背景
+    rect(s, 0.3, 1.2, 12.73, 5.65, C_NAVY)
+
+    # 全要素を左右2カラムに振り分けて配置
+    elements = data.get("elements", [])
+    elements_by_id = {el["id"]: el for el in elements}
+
+    # グループを使わず全要素を順番に並べる
+    all_items = []
     groups = data.get("structure", {}).get("groups", [])
-    if not groups:
-        groups = [{"label": "内容", "items": [el["id"] for el in data.get("elements", [])]}]
+    if groups:
+        for group in groups:
+            lbl = group.get("label", "")
+            if lbl:
+                all_items.append({"type": "heading", "content": lbl})
+            for iid in group.get("items", []):
+                el = elements_by_id.get(iid)
+                if el:
+                    all_items.append(el)
+    else:
+        all_items = elements
 
-    for group in groups:
-        s = prs.slides.add_slide(blank)
-        bg(s, C_DARK)
-        rect(s, 0, 0, 13.33, 0.08, C_ACCENT)
-        txt(s, group.get("label", "内容"), 0.4, 0.18, 12.5, 0.72, size=28, bold=True)
-        rect(s, 0.3, 1.0, 12.73, 6.1, C_NAVY)
-        y = 1.15
-        for item_id in group.get("items", []):
-            el = elements_by_id.get(item_id)
-            if not el: continue
+    # 2カラム配置
+    mid = max(1, len(all_items) // 2)
+    col_left  = all_items[:mid]
+    col_right = all_items[mid:]
+
+    def render_col(items, x_start, col_w):
+        y = 1.3
+        for el in items:
             if el.get("type") == "heading":
-                if y > 1.15: y += 0.08
-                txt(s, el["content"], 0.55, y, 12.2, 0.52, size=18, bold=True, color=C_ACCENT)
-                y += 0.6
+                if y > 1.3: y += 0.05
+                txt(s, el.get("content", ""), x_start, y, col_w, 0.45,
+                    size=15, bold=True, color=C_ACCENT)
+                y += 0.5
             else:
-                txt(s, "  •  " + el["content"], 0.55, y, 12.1, 0.45, size=14, color=C_LIGHT)
-                y += 0.48
-            if y > 6.7: break
-        rect(s, 0, 7.15, 13.33, 0.35, C_NAVY)
-        txt(s, "パシャッと  |  自動生成", 0.4, 7.15, 12.9, 0.35,
-            size=10, color=C_MUTED, align=PP_ALIGN.RIGHT)
+                content = "• " + el.get("content", "")
+                txt(s, content, x_start + 0.1, y, col_w - 0.1, 0.4,
+                    size=12, color=C_LIGHT)
+                y += 0.43
+            if y > 6.65: break
+
+    render_col(col_left,  0.45, 6.05)
+    render_col(col_right, 6.7,  6.05)
+
+    # フッター
+    rect(s, 0, 7.15, 13.33, 0.35, C_NAVY)
+    txt(s, "パシャッと  |  自動生成", 0.4, 7.15, 12.9, 0.35,
+        size=10, color=C_MUTED, align=PP_ALIGN.RIGHT)
 
     buf = io.BytesIO()
     prs.save(buf)
