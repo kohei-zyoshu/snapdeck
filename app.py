@@ -199,7 +199,7 @@ st.markdown("""
     padding: 0 1.5rem !important;
 }
 [data-testid="stFileUploaderDropzone"] button::after {
-    content: "📁　ファイルを選ぶ";
+    content: "📷　写真を撮る・選ぶ";
     font-size: 1.05rem;
     font-weight: 700;
 }
