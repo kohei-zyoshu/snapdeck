@@ -759,12 +759,36 @@ if "extracted" in st.session_state:
         "<div class='step'><span class='snum'>３</span>保存する</div>",
         unsafe_allow_html=True)
 
-    el_count = len(extracted.get("elements", []))
+    elements = extracted.get("elements", [])
+    el_count = len(elements)
     st.markdown(f"""
 <div class='done-box'>
 ✅ 完了　読み取り：<strong>{el_count} 件</strong>
 </div>
 """, unsafe_allow_html=True)
+
+    # ── 読み取り結果をリストで表示 ──
+    if elements:
+        sorted_els = sorted(elements,
+                            key=lambda e: (float(e.get("y", 0)), float(e.get("x", 0))))
+        TYPE_ICON  = {"heading": "📌", "bullet": "・", "arrow": "→", "text": "　"}
+        SHAPE_ICON = {"rect": "▭ ", "ellipse": "◯ "}
+        rows_html  = ""
+        for el in sorted_els:
+            etype   = el.get("type", "text")
+            content = el.get("content", "")
+            shape   = el.get("shape", "none")
+            icon    = SHAPE_ICON.get(shape, TYPE_ICON.get(etype, "　"))
+            bold    = "font-weight:700;" if etype == "heading" else ""
+            rows_html += (
+                f"<div style='padding:0.35rem 0.5rem; border-bottom:1px solid #e0eaf0;"
+                f" font-size:1rem; {bold}'>{icon}{content}</div>"
+            )
+        st.markdown(
+            f"<div style='background:#fff; border:1.5px solid #C8D8E4; border-radius:10px;"
+            f" max-height:260px; overflow-y:auto; margin-bottom:1rem;'>"
+            f"{rows_html}</div>",
+            unsafe_allow_html=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
