@@ -351,12 +351,21 @@ st.markdown(
 tab_cam, tab_file = st.tabs(["📷　カメラで撮影", "📁　ファイルを選択"])
 
 with tab_cam:
-    camera_photo = st.camera_input(
-        "カメラを起動",
-        facing_mode="environment",
-        help="ブラウザのカメラ許可が必要です（初回のみポップアップが表示されます）",
-        label_visibility="collapsed",
-    )
+    # facing_mode パラメータは Streamlit 1.42+ 以降でのみ対応。
+    # Streamlit Cloud の実行バージョンに合わせて try/except でフォールバック。
+    try:
+        camera_photo = st.camera_input(
+            "カメラを起動",
+            facing_mode="environment",
+            help="ブラウザのカメラ許可が必要です（初回のみポップアップが表示されます）",
+            label_visibility="collapsed",
+        )
+    except TypeError:
+        camera_photo = st.camera_input(
+            "カメラを起動",
+            help="ブラウザのカメラ許可が必要です（初回のみポップアップが表示されます）",
+            label_visibility="collapsed",
+        )
 
 with tab_file:
     uploaded_file = st.file_uploader(
