@@ -235,28 +235,34 @@ def preprocess_image(img: Image.Image, do_trim: bool = True) -> Image.Image:
 
 def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
     """PIL Image → OCR用 base64（コントラスト強化・高解像度）"""
-    img = ImageEnhance.Contrast(img).enhance(1.5)
-    img = ImageEnhance.Sharpness(img).enhance(2.0)
-    img = ImageEnhance.Brightness(img).enhance(1.1)
+    # 適度なコントラスト・シャープネス向上（過剰補正は逆効果）
+    img = ImageEnhance.Contrast(img).enhance(1.3)
+    img = ImageEnhance.Sharpness(img).enhance(1.4)
     if img.width > max_px or img.height > max_px:
         img.thumbnail((max_px, max_px), Image.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=92)
+    img.save(buf, format="JPEG", quality=95)
     return base64.standard_b64encode(buf.getvalue()).decode("utf-8"), "image/jpeg"
 
 
-EXTRACTION_PROMPT = """この画像（ホワイトボード・手書きメモ）に書かれたすべての文字を読み取り、次のJSON形式で返してください。
-座標は画像全体を幅1.0・高さ1.0として正規化（x=左端, y=上端, w=幅, h=高さ）。
+EXTRACTION_PROMPT = """あなたは優秀なOCRエンジンです。
+この画像（ホワイトボード・手書きメモ・付箋など）に書かれた**すべての文字・数字・記号**を正確に読み取り、以下のJSON形式のみで返してください。
 
-{"title":"タイトル","items":[{"type":"heading","text":"見出し","x":0.05,"y":0.02,"w":0.9,"h":0.08,"color":"black","bold":true,"shape":"none"},{"type":"bullet","text":"テキスト","x":0.05,"y":0.12,"w":0.85,"h":0.06,"color":"black","bold":false,"shape":"none"},{"type":"text","text":"囲み文字","x":0.1,"y":0.22,"w":0.35,"h":0.12,"color":"red","bold":false,"shape":"rect"},{"type":"text","text":"丸囲み","x":0.55,"y":0.22,"w":0.3,"h":0.10,"color":"blue","bold":false,"shape":"ellipse"},{"type":"arrow","text":"矢印ラベル","x":0.3,"y":0.40,"w":0.4,"h":0.05,"color":"black","bold":false,"shape":"none"}],"tables":[{"x":0.0,"y":0.7,"w":1.0,"h":0.25,"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
+【座標ルール】
+- 画像の左上を(0,0)、右下を(1,1)として正規化
+- x=テキスト領域の左端、y=テキスト領域の上端、w=幅、h=高さ（すべて0.0〜1.0）
+- 画像を上から下・左から右の順に読み、yの値が上の要素ほど小さくなるよう注意
 
-注意:
-- 画像内のすべての文字・数字・記号を漏れなく読む
-- type: heading/bullet/text/arrow のどれか
-- shape: 四角で囲まれていれば "rect"、丸で囲まれていれば "ellipse"、囲みなしは "none"
-- color: black/red/blue/green/orange/purple/pink/gray/brown/yellow
+【出力形式】
+{"title":"画像全体のタイトルや主題（なければ空文字）","items":[{"type":"heading","text":"正確な文字列","x":0.05,"y":0.02,"w":0.90,"h":0.07,"color":"black","bold":true,"shape":"none"},{"type":"bullet","text":"正確な文字列","x":0.05,"y":0.11,"w":0.85,"h":0.05,"color":"black","bold":false,"shape":"none"},{"type":"text","text":"四角囲みの文字","x":0.10,"y":0.20,"w":0.35,"h":0.10,"color":"red","bold":false,"shape":"rect"},{"type":"text","text":"丸囲みの文字","x":0.55,"y":0.20,"w":0.30,"h":0.10,"color":"blue","bold":false,"shape":"ellipse"},{"type":"arrow","text":"矢印のラベル","x":0.30,"y":0.38,"w":0.40,"h":0.05,"color":"black","bold":false,"shape":"none"}],"tables":[{"x":0.0,"y":0.7,"w":1.0,"h":0.25,"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
+
+【必須ルール】
+- 画像内のすべての文字を漏れなく・正確に読む（略さない・推測で補わない）
+- type: heading（見出し・大きな文字）/ bullet（箇条書き・リスト）/ text（一般テキスト）/ arrow（矢印のラベル）
+- shape: 四角で囲まれていれば "rect"、丸・楕円で囲まれていれば "ellipse"、囲みなしは "none"
+- color: black/red/blue/green/orange/purple/pink/gray/brown/yellow のいずれか
 - 表がなければ tables は []
-- JSONのみ返す。説明文・コードブロック不要"""
+- JSONのみ返す（説明文・コードブロック・前置き一切不要）"""
 
 
 def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
@@ -264,8 +270,8 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=6000,
+        model="claude-sonnet-4-6",
+        max_tokens=8192,
         messages=[
             {"role": "user", "content": [
                 {"type": "image", "source": {
