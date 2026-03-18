@@ -1,6 +1,5 @@
 """
-パシャッと — スマホ・高齢者対応ユニバーサルデザイン版
-ホワイトボード・手書きメモ → スライド自動変換
+パシャッと — 手書きメモ・ホワイトボード → スライド自動変換
 """
 
 import os, io, json, base64, re
@@ -17,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ─── CSS（高齢者・スマホ ユニバーサルデザイン） ─────────────────────────────
+# ─── CSS（女性向け・温かみのあるローズテーマ） ──────────────────────────────
 st.markdown("""
 <style>
 /* ── Streamlit UI を非表示 ── */
@@ -31,22 +30,22 @@ a[href*="streamlit.io"] { display: none !important; }
 .viewerBadge_container__r5tak { display: none !important; }
 .stActionButton { display: none !important; }
 
-/* ── 全体背景 ── */
-.stApp { background: #F4F7FA; }
+/* ── 全体背景（温かみのあるクリーム） ── */
+.stApp { background: #FBF6F7; }
 .main .block-container { padding: 0 1rem 5rem; max-width: 560px; }
 
-/* ── 固定ヘッダーバー ── */
+/* ── 固定ヘッダーバー（深みのあるプラム） ── */
 .top-bar {
     position: sticky;
     top: 0;
     z-index: 999;
-    background: #0D1B2A;
+    background: #7D3454;
     padding: 0.55rem 1.2rem;
     margin: 0 -1rem 1.6rem;
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+    box-shadow: 0 2px 12px rgba(125,52,84,0.28);
 }
 .top-bar-logo {
     font-size: 1.55rem;
@@ -55,10 +54,10 @@ a[href*="streamlit.io"] { display: none !important; }
     letter-spacing: -0.01em;
     line-height: 1;
 }
-.top-bar-logo em { color: #0099BB; font-style: normal; }
+.top-bar-logo em { color: #F4B8CA; font-style: normal; }
 .top-bar-tagline {
     font-size: 0.88rem;
-    color: #90B8C8;
+    color: #E8C4CE;
     font-weight: 500;
     line-height: 1.3;
 }
@@ -70,11 +69,11 @@ a[href*="streamlit.io"] { display: none !important; }
     gap: 0.75rem;
     font-size: 1.45rem;
     font-weight: 800;
-    color: #0D1B2A;
+    color: #3A1E28;
     margin: 2rem 0 0.6rem;
 }
 .snum {
-    background: #0099BB;
+    background: #C2587A;
     color: #fff;
     border-radius: 50%;
     width: 42px; height: 42px;
@@ -87,12 +86,12 @@ a[href*="streamlit.io"] { display: none !important; }
 
 /* ── ヒント・説明文 ── */
 .hint {
-    color: #3D5A6A;
+    color: #5C2A3C;
     font-size: 1.1rem;
     margin: 0 0 1rem;
     line-height: 1.8;
-    background: #EDF4F8;
-    border-left: 4px solid #0099BB;
+    background: #FDF0F3;
+    border-left: 4px solid #C2587A;
     border-radius: 0 8px 8px 0;
     padding: 0.75rem 1rem;
 }
@@ -101,48 +100,48 @@ a[href*="streamlit.io"] { display: none !important; }
 .stButton > button {
     font-size: 1.3rem !important;
     min-height: 72px !important;
-    border-radius: 16px !important;
+    border-radius: 20px !important;
     font-weight: 800 !important;
     width: 100% !important;
     letter-spacing: 0.03em !important;
     transition: opacity 0.15s !important;
 }
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #0099BB 0%, #007A99 100%) !important;
+    background: linear-gradient(135deg, #C2587A 0%, #A0456A 100%) !important;
     color: white !important;
     border: none !important;
-    box-shadow: 0 5px 16px rgba(0,153,187,0.35) !important;
+    box-shadow: 0 5px 18px rgba(194,88,122,0.38) !important;
 }
 .stButton > button[kind="primary"]:hover { opacity: 0.88 !important; }
 .stButton > button[kind="secondary"] {
-    background: #EBF3F8 !important;
-    color: #1C3A4A !important;
-    border: 2px solid #B0CCD8 !important;
+    background: #FDF0F3 !important;
+    color: #5C2A3C !important;
+    border: 2px solid #E0AABB !important;
 }
 .stButton > button:disabled { opacity: 0.38 !important; cursor: not-allowed !important; }
 
-/* ── ダウンロードボタン ── */
+/* ── ダウンロードボタン（ミント） ── */
 .stDownloadButton > button {
-    background: linear-gradient(135deg, #10B981 0%, #059669 100%) !important;
+    background: linear-gradient(135deg, #4CAF7F 0%, #3A9B6A 100%) !important;
     color: white !important;
     font-size: 1.3rem !important;
     min-height: 72px !important;
-    border-radius: 16px !important;
+    border-radius: 20px !important;
     font-weight: 800 !important;
     width: 100% !important;
     border: none !important;
-    box-shadow: 0 5px 16px rgba(16,185,129,0.35) !important;
+    box-shadow: 0 5px 18px rgba(76,175,127,0.35) !important;
     letter-spacing: 0.03em !important;
 }
 
 /* ── 完了ボックス ── */
 .done-box {
-    background: #D1FAE5;
-    border: 2.5px solid #10B981;
+    background: #FCE8EF;
+    border: 2.5px solid #C2587A;
     border-radius: 16px;
     padding: 1.4rem 1.6rem;
     font-size: 1.2rem;
-    color: #064E3B;
+    color: #5C2A3C;
     font-weight: 700;
     margin: 1.2rem 0;
     line-height: 1.9;
@@ -152,16 +151,16 @@ a[href*="streamlit.io"] { display: none !important; }
 [data-testid="stFileUploaderDropzone"] {
     min-height: 150px;
     border-radius: 14px !important;
-    border: 2.5px dashed #90B8C8 !important;
-    background: #F0F8FB !important;
+    border: 2.5px dashed #E0AABB !important;
+    background: #FDF5F7 !important;
 }
 [data-testid="stFileUploaderDropzoneInstructions"] span,
 [data-testid="stFileUploaderDropzoneInstructions"] small { display: none !important; }
 [data-testid="stFileUploaderDropzoneInstructions"]::before {
-    content: "ここに画像をドラッグするか、下のボタンでファイルを選んでください";
+    content: "写真をドラッグするか、下のボタンで選んでください";
     display: block;
     font-size: 1.05rem;
-    color: #3D6070;
+    color: #7A4458;
     margin-bottom: 0.6rem;
     text-align: center;
 }
@@ -169,14 +168,14 @@ a[href*="streamlit.io"] { display: none !important; }
     content: "対応形式：JPG・PNG・WebP　最大20MBまで";
     display: block;
     font-size: 0.9rem;
-    color: #7A9AAD;
+    color: #C090A0;
     text-align: center;
     margin-top: 0.3rem;
 }
 [data-testid="stFileUploaderDropzone"] button {
     font-size: 0 !important;
     min-height: 52px !important;
-    border-radius: 10px !important;
+    border-radius: 12px !important;
     padding: 0 1.5rem !important;
 }
 [data-testid="stFileUploaderDropzone"] button::after {
@@ -188,7 +187,7 @@ a[href*="streamlit.io"] { display: none !important; }
 /* ── その他 ── */
 .stToggle label { font-size: 1.1rem !important; font-weight: 700 !important; }
 .stExpander summary p { font-size: 1.1rem !important; font-weight: 600 !important; }
-hr { margin: 1.6rem 0 !important; border-color: #C8D8E4 !important; border-width: 1.5px !important; }
+hr { margin: 1.6rem 0 !important; border-color: #F0D0DA !important; border-width: 1.5px !important; }
 .stAlert p { font-size: 1.05rem !important; line-height: 1.7 !important; }
 .stSpinner p { font-size: 1.1rem !important; }
 </style>
@@ -488,98 +487,62 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
 
     elements = data.get("elements", [])
 
-    # 座標情報があれば座標ベース配置、なければ順次配置（フォールバック）
-    has_coords = any("x" in el for el in elements)
+    # ── 座標を読み取り順序にのみ使用し、等間隔で順次配置 ──
+    # → フォントサイズ統一・重なりなし・1スライドに収める
+    sorted_els = sorted(elements,
+                        key=lambda e: (float(e.get("y", 0)), float(e.get("x", 0))))
+    n = len(sorted_els)
 
-    if has_coords:
-        # ── 座標ベース配置：画像上の位置をスライドに1:1でマッピング ──
-        for el in sorted(elements, key=lambda e: (e.get("y", 0), e.get("x", 0))):
-            x_pct = float(el.get("x", 0.0))
-            y_pct = float(el.get("y", 0.0))
-            w_pct = float(el.get("w", 0.9))
-            h_pct = float(el.get("h", 0.06))
-
-            sx   = CX + x_pct * CW
-            sy   = CY + y_pct * CH
-            sw   = max(0.3,  min(w_pct * CW, CX + CW - sx))
-            el_h = max(0.15, min(h_pct * CH, CY + CH - sy))
-
-            etype      = el.get("type", "text")
-            content    = el.get("content", "")
-            style      = el.get("style") or {}
-            color      = resolve_color(style.get("color", el.get("color", "black")))
-            bold       = style.get("bold", el.get("bold", False)) or (etype == "heading")
-            underl     = style.get("underline", False)
-            shape_type = el.get("shape", "none")  # rect / ellipse / none
-
-            # 高さからフォントサイズを逆算（0.55は行間係数）
-            font_pt = max(8, min(24, int(el_h * 72 * 0.55)))
-
-            if shape_type in ("rect", "ellipse"):
-                # 図形コンテナにテキストを格納（独立して選択・編集可能）
-                shape_txt(s, shape_type, content, sx, sy, sw, el_h,
-                          size=font_pt, bold=bold, color=color, underline=underl)
-            elif etype == "heading":
-                txt(s, content, sx, sy, sw, el_h,
-                    size=min(font_pt + 2, 26), bold=True, color=color, underline=underl)
-            elif etype == "arrow":
-                txt(s, f"→ {content}", sx, sy, sw, el_h,
-                    size=font_pt, color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
-            else:
-                txt(s, content, sx, sy, sw, el_h,
-                    size=font_pt, bold=bold, color=color, underline=underl)
-
-    else:
-        # ── フォールバック：縦/横に応じた順次配置 ──
-        sorted_els = sorted(elements, key=lambda e: (
-            (e.get("position") or {}).get("zone_row", 1),
-            (e.get("position") or {}).get("zone_col", 0),
-        ))
-
-        if is_portrait:
-            items_col = sorted_els
+    if n > 0:
+        # 横スライドかつ要素数が多い場合は2列に分割
+        use_two_cols = not is_portrait and n > 6
+        if use_two_cols:
+            mid       = (n + 1) // 2
+            col_left  = sorted_els[:mid]
+            col_right = sorted_els[mid:]
+            col_n     = max(len(col_left), len(col_right), 1)
+            col_w     = (CW - 0.25) / 2
         else:
-            col_left  = [e for e in sorted_els if (e.get("position") or {}).get("zone_col", 0) <= 1]
-            col_right = [e for e in sorted_els if (e.get("position") or {}).get("zone_col", 2) == 2]
-            if not col_right and len(col_left) > 3:
-                mid       = len(col_left) // 2
-                col_right = col_left[mid:]
-                col_left  = col_left[:mid]
+            col_left  = sorted_els
+            col_right = []
+            col_n     = n
+            col_w     = CW
 
-        max_items = len(sorted_els) if is_portrait else max(
-            len(col_left), len(col_right), 1)
-        step_h  = max(0.28, min(0.52, CH / max(max_items, 1)))
-        base_pt = max(8, min(14, int(step_h * 26)))
+        # 等間隔ステップ高 → 統一フォントサイズを算出
+        step_h  = max(0.25, min(0.55, CH / col_n))
+        base_pt = max(9, min(18, int(step_h * 72 * 0.50)))
+        head_pt = min(base_pt + 3, 22)
 
-        def render_fallback(items, x_start, col_w):
+        def render_col(items, x_start, w):
             y = CY
             for el in items:
-                if y >= CY + CH:
-                    break
-                etype   = el.get("type", "text")
-                content = el.get("content", "")
-                style   = el.get("style") or {}
-                color   = resolve_color(style.get("color", "black"))
-                bold    = style.get("bold", False) or (etype == "heading")
-                underl  = style.get("underline", False)
-                size    = {"large": base_pt + 2, "medium": base_pt, "small": base_pt - 2}.get(
-                              style.get("size", "medium"), base_pt)
-                if etype == "heading":
-                    txt(s, content, x_start, y, col_w, step_h,
-                        size=min(size + 2, base_pt + 3), bold=True, color=color, underline=underl)
+                etype      = el.get("type", "text")
+                content    = el.get("content", "")
+                style      = el.get("style") or {}
+                color      = resolve_color(style.get("color", el.get("color", "black")))
+                bold       = style.get("bold", el.get("bold", False)) or (etype == "heading")
+                underl     = style.get("underline", False)
+                shape_type = el.get("shape", "none")
+
+                if shape_type in ("rect", "ellipse"):
+                    shape_txt(s, shape_type, content, x_start, y, w, step_h,
+                              size=base_pt, bold=bold, color=color, underline=underl)
+                elif etype == "heading":
+                    txt(s, content, x_start, y, w, step_h,
+                        size=head_pt, bold=True, color=color, underline=underl)
                 elif etype == "arrow":
-                    txt(s, f"→ {content}", x_start + 0.1, y, col_w - 0.1, step_h,
-                        size=max(size - 1, 8), color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
+                    txt(s, f"→ {content}", x_start + 0.1, y, w - 0.1, step_h,
+                        size=base_pt, color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
                 else:
-                    txt(s, content, x_start + 0.1, y, col_w - 0.1, step_h,
-                        size=size, bold=bold, color=color, underline=underl)
+                    txt(s, content, x_start + 0.05, y, w - 0.05, step_h,
+                        size=base_pt, bold=bold, color=color, underline=underl)
                 y += step_h
 
-        if is_portrait:
-            render_fallback(sorted_els, CX, CW)
+        if use_two_cols:
+            render_col(col_left,  CX,                  col_w)
+            render_col(col_right, CX + col_w + 0.25,   col_w)
         else:
-            render_fallback(col_left,  0.45, 6.0)
-            render_fallback(col_right, 6.75, 6.0)
+            render_col(sorted_els, CX, CW)
 
     # ─ 表を配置（座標ベース対応）─
     for tbl_data in data.get("tables", []):
@@ -614,7 +577,7 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
 st.markdown("""
 <div class='top-bar'>
   <div class='top-bar-logo'>パシャッ<em>と</em></div>
-  <div class='top-bar-tagline'>メモの写真を<br>スライドに変換</div>
+  <div class='top-bar-tagline'>大切なメモを<br>きれいなスライドへ ✨</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -640,7 +603,7 @@ st.markdown(
     "<div class='step'><span class='snum'>１</span>写真を選ぶ</div>",
     unsafe_allow_html=True)
 st.markdown(
-    "<div class='hint'>ホワイトボードや手書きメモを、<strong>正面から</strong>撮った写真を選んでください。</div>",
+    "<div class='hint'>ホワイトボードやメモ帳の写真を選ぶだけ。あとはAIがきれいに仕上げます 🌸</div>",
     unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader(
@@ -665,9 +628,9 @@ if uploaded_file:
     st.markdown("---")
 
     do_trim = st.toggle(
-        "✂️　余白を自動でカット（おすすめ）",
+        "✂️　余白を自動カット（おすすめ）",
         value=True,
-        help="余白を除去して読み取り精度を上げます。",
+        help="不要な余白を取り除いて、読み取り精度をアップします。",
     )
 
     display_img = preprocess_image(pil_image, do_trim=do_trim)
@@ -690,13 +653,13 @@ st.markdown(
 
 if not uploaded_file:
     st.markdown(
-        "<div class='hint' style='border-color:#F5A623; background:#FFF8E7;'>"
-        "↑ まず写真を選んでください。"
+        "<div class='hint' style='border-color:#E0AABB; background:#FEF5F7;'>"
+        "↑ まず写真を選んでみてください 📷"
         "</div>",
         unsafe_allow_html=True)
 
 convert_btn = st.button(
-    "✨　スライドに変換する",
+    "✨　スライドに変えてみる",
     type="primary",
     use_container_width=True,
     disabled=not uploaded_file,
@@ -830,7 +793,7 @@ if "extracted" in st.session_state:
 # ── フッター ──
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown(
-    "<div style='text-align:center; color:#90B0BE; font-size:0.9rem; line-height:2;'>"
-    "AI文字認識による自動変換サービス<br>© 2026 パシャッと"
+    "<div style='text-align:center; color:#C090A0; font-size:0.9rem; line-height:2;'>"
+    "AI文字認識による自動変換サービス<br>© 2026 パシャッと 🌸"
     "</div>",
     unsafe_allow_html=True)
