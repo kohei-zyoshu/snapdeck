@@ -3,12 +3,11 @@
 ホワイトボード・手書きメモ → スライド自動変換
 """
 
-import os, io, json, base64, re, math
+import os, io, json, base64, re
 from datetime import datetime
 
-import numpy as np
 import streamlit as st
-from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageEnhance, ImageOps
 
 # ─── ページ設定 ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -21,13 +20,12 @@ st.set_page_config(
 # ─── CSS（高齢者・スマホ ユニバーサルデザイン） ─────────────────────────────
 st.markdown("""
 <style>
-/* ── Streamlit ヘッダー・フッター・各種リンクを非表示 ── */
+/* ── Streamlit UI を非表示 ── */
 header[data-testid="stHeader"] { display: none !important; }
 #MainMenu { display: none !important; }
 footer { display: none !important; }
 [data-testid="stToolbar"] { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
-/* GitHub・Streamlit ロゴリンク */
 a[href*="github.com"] { display: none !important; }
 a[href*="streamlit.io"] { display: none !important; }
 .viewerBadge_container__r5tak { display: none !important; }
@@ -65,17 +63,6 @@ a[href*="streamlit.io"] { display: none !important; }
     line-height: 1.3;
 }
 
-/* ── ロゴ・タイトル（旧：使用停止） ── */
-.logo { display: none; }
-.tagline { display: none; }
-.sub-tagline {
-    text-align: center;
-    color: #7A9AAD;
-    font-size: 0.95rem;
-    margin-bottom: 2rem;
-    line-height: 1.5;
-}
-
 /* ── ステップラベル ── */
 .step {
     display: flex;
@@ -90,8 +77,7 @@ a[href*="streamlit.io"] { display: none !important; }
     background: #0099BB;
     color: #fff;
     border-radius: 50%;
-    width: 42px;
-    height: 42px;
+    width: 42px; height: 42px;
     line-height: 42px;
     text-align: center;
     font-size: 1.15rem;
@@ -111,18 +97,6 @@ a[href*="streamlit.io"] { display: none !important; }
     padding: 0.75rem 1rem;
 }
 
-/* ── 案内バナー（注意・補足） ── */
-.guide-box {
-    background: #FFF8E7;
-    border: 1.5px solid #F5C842;
-    border-radius: 10px;
-    padding: 0.85rem 1rem;
-    font-size: 1.05rem;
-    color: #5C4800;
-    line-height: 1.7;
-    margin-bottom: 1rem;
-}
-
 /* ── ボタン全般（大きく・見やすく） ── */
 .stButton > button {
     font-size: 1.3rem !important;
@@ -139,18 +113,13 @@ a[href*="streamlit.io"] { display: none !important; }
     border: none !important;
     box-shadow: 0 5px 16px rgba(0,153,187,0.35) !important;
 }
-.stButton > button[kind="primary"]:hover {
-    opacity: 0.88 !important;
-}
+.stButton > button[kind="primary"]:hover { opacity: 0.88 !important; }
 .stButton > button[kind="secondary"] {
     background: #EBF3F8 !important;
     color: #1C3A4A !important;
     border: 2px solid #B0CCD8 !important;
 }
-.stButton > button:disabled {
-    opacity: 0.38 !important;
-    cursor: not-allowed !important;
-}
+.stButton > button:disabled { opacity: 0.38 !important; cursor: not-allowed !important; }
 
 /* ── ダウンロードボタン ── */
 .stDownloadButton > button {
@@ -179,13 +148,6 @@ a[href*="streamlit.io"] { display: none !important; }
     line-height: 1.9;
 }
 
-/* ── タブ ── */
-.stTabs [data-baseweb="tab"] {
-    font-size: 1.15rem !important;
-    font-weight: 700 !important;
-    min-height: 56px !important;
-}
-
 /* ── ファイルアップローダー ── */
 [data-testid="stFileUploaderDropzone"] {
     min-height: 150px;
@@ -193,13 +155,8 @@ a[href*="streamlit.io"] { display: none !important; }
     border: 2.5px dashed #90B8C8 !important;
     background: #F0F8FB !important;
 }
-/* 英語の案内テキストを非表示にして日本語に置き換え */
-[data-testid="stFileUploaderDropzoneInstructions"] span {
-    display: none !important;
-}
-[data-testid="stFileUploaderDropzoneInstructions"] small {
-    display: none !important;
-}
+[data-testid="stFileUploaderDropzoneInstructions"] span,
+[data-testid="stFileUploaderDropzoneInstructions"] small { display: none !important; }
 [data-testid="stFileUploaderDropzoneInstructions"]::before {
     content: "ここに画像をドラッグするか、下のボタンでファイルを選んでください";
     display: block;
@@ -216,7 +173,6 @@ a[href*="streamlit.io"] { display: none !important; }
     text-align: center;
     margin-top: 0.3rem;
 }
-/* 「Browse files」ボタンを「ファイルを選ぶ」に */
 [data-testid="stFileUploaderDropzone"] button {
     font-size: 0 !important;
     min-height: 52px !important;
@@ -229,19 +185,11 @@ a[href*="streamlit.io"] { display: none !important; }
     font-weight: 700;
 }
 
-/* ── トグル ── */
+/* ── その他 ── */
 .stToggle label { font-size: 1.1rem !important; font-weight: 700 !important; }
-
-/* ── expander ── */
 .stExpander summary p { font-size: 1.1rem !important; font-weight: 600 !important; }
-
-/* ── 区切り線 ── */
 hr { margin: 1.6rem 0 !important; border-color: #C8D8E4 !important; border-width: 1.5px !important; }
-
-/* ── 警告・エラー ── */
 .stAlert p { font-size: 1.05rem !important; line-height: 1.7 !important; }
-
-/* ── スピナー文字 ── */
 .stSpinner p { font-size: 1.1rem !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -250,7 +198,7 @@ hr { margin: 1.6rem 0 !important; border-color: #C8D8E4 !important; border-width
 # ─── バックエンド関数 ──────────────────────────────────────────────────────────
 
 def get_api_key() -> str:
-    """APIキーを Secrets または入力欄から取得（前後の空白・改行を除去）"""
+    """APIキーを Secrets / 環境変数 / 入力欄から取得"""
     try:
         key = st.secrets["ANTHROPIC_API_KEY"]
         if key:
@@ -263,110 +211,47 @@ def get_api_key() -> str:
     return st.session_state.get("api_key_input", "").strip()
 
 
-def fix_orientation(img: Image.Image) -> Image.Image:
-    """EXIFの向き情報を使って自動回転（スマホ写真の天地補正）"""
+def preprocess_image(img: Image.Image, do_trim: bool = True) -> Image.Image:
+    """EXIF回転 → 余白カット"""
     try:
         img = ImageOps.exif_transpose(img)
     except Exception:
         pass
-    return img
-
-
-def deskew_image(img: Image.Image) -> Image.Image:
-    """投影プロファイル法で傾きを検出・補正する（誤検知防止版）"""
-    try:
-        # 400px縮小版で角度検出
-        thumb = img.copy()
-        thumb.thumbnail((400, 400), Image.LANCZOS)
-        gray   = np.array(thumb.convert("L"), dtype=np.float32)
-        # 固定閾値128で2値化（安定性重視）
-        binary = (gray < 128).astype(np.float32)
-        h, w   = binary.shape
-        ys     = np.arange(h, dtype=np.float32)
-        xs     = np.arange(w, dtype=np.float32)
-
-        def projection_score(angle: float) -> float:
-            rad    = math.radians(angle)
-            ny     = ys[:, None] * math.cos(rad) - xs[None, :] * math.sin(rad)
-            ny_int = np.clip(ny.astype(np.int32) + w, 0, h + w - 1)
-            proj   = np.bincount(ny_int[binary > 0].ravel(), minlength=h + w)
-            return float(np.var(proj))
-
-        # 0°（傾きなし）のベーススコアを計算
-        base_score = projection_score(0.0)
-
-        # ── 第1段階：±15° を 1° 刻みで粗探索 ──
-        best_angle = 0.0
-        best_score = base_score
-        for angle in np.arange(-15, 15.5, 1.0):
-            score = projection_score(float(angle))
-            if score > best_score:
-                best_score = score
-                best_angle = float(angle)
-
-        # ── 改善率が15%未満なら補正しない（誤検知防止） ──
-        if base_score > 0 and (best_score - base_score) / base_score < 0.15:
-            return img
-
-        # ── 第2段階：粗探索結果の ±1.5° を 0.1° 刻みで精密探索 ──
-        fine_best  = best_angle
-        fine_score = best_score
-        for angle in np.arange(best_angle - 1.5, best_angle + 1.6, 0.1):
-            score = projection_score(float(angle))
-            if score > fine_score:
-                fine_score = score
-                fine_best  = float(angle)
-
-        # 1°以上の傾きが検出された場合のみ補正
-        if abs(fine_best) >= 1.0:
-            img = img.rotate(-fine_best, expand=True,
-                             fillcolor=(255, 255, 255), resample=Image.BICUBIC)
-    except Exception:
-        pass
-    return img
-
-
-def auto_trim(img: Image.Image, margin: int = 30) -> Image.Image:
-    """白い余白を自動でカット（読み取り精度向上）"""
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    bg   = Image.new("RGB", img.size, (255, 255, 255))
-    diff = ImageChops.difference(img, bg)
-    bbox = diff.getbbox()
-    if not bbox:
-        return img
-    left   = max(0,          bbox[0] - margin)
-    top    = max(0,          bbox[1] - margin)
-    right  = min(img.width,  bbox[2] + margin)
-    bottom = min(img.height, bbox[3] + margin)
-    return img.crop((left, top, right, bottom))
-
-
-def enhance_for_ocr(img: Image.Image) -> Image.Image:
-    """OCR精度を上げるための画像前処理（コントラスト・シャープネス強化）"""
-    img = ImageEnhance.Contrast(img).enhance(1.5)
-    img = ImageEnhance.Sharpness(img).enhance(2.0)
-    img = ImageEnhance.Brightness(img).enhance(1.1)
-    return img
-
-
-def preprocess_image(img: Image.Image, do_trim: bool = True) -> Image.Image:
-    """全前処理をまとめて実行: EXIF回転 → トリミング"""
-    img = fix_orientation(img)
     if do_trim:
-        img = auto_trim(img)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        bg   = Image.new("RGB", img.size, (255, 255, 255))
+        diff = ImageChops.difference(img, bg)
+        bbox = diff.getbbox()
+        if bbox:
+            margin = 30
+            img = img.crop((
+                max(0,          bbox[0] - margin),
+                max(0,          bbox[1] - margin),
+                min(img.width,  bbox[2] + margin),
+                min(img.height, bbox[3] + margin),
+            ))
     return img
 
 
 def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
-    """PIL Image → base64（高解像度維持・OCR前処理済み）"""
-    img = enhance_for_ocr(img)
+    """PIL Image → OCR用 base64（コントラスト強化・高解像度）"""
+    img = ImageEnhance.Contrast(img).enhance(1.5)
+    img = ImageEnhance.Sharpness(img).enhance(2.0)
+    img = ImageEnhance.Brightness(img).enhance(1.1)
     if img.width > max_px or img.height > max_px:
         img.thumbnail((max_px, max_px), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=92)
     return base64.standard_b64encode(buf.getvalue()).decode("utf-8"), "image/jpeg"
 
+
+SYSTEM_PROMPT = (
+    "You are a JSON extraction engine. "
+    "You must always respond with a single valid JSON object and absolutely nothing else. "
+    "Do not include any explanation, markdown formatting, code fences, or commentary. "
+    "Start your response with { and end with }."
+)
 
 EXTRACTION_PROMPT = """画像（ホワイトボード・手書きメモ）を解析し、以下のJSON形式だけを返してください。説明文・コードブロック・前置きは一切不要です。
 
@@ -382,14 +267,6 @@ EXTRACTION_PROMPT = """画像（ホワイトボード・手書きメモ）を解
 - 必ず { で始まり } で終わる純粋なJSONのみ返すこと"""
 
 
-SYSTEM_PROMPT = (
-    "You are a JSON extraction engine. "
-    "You must always respond with a single valid JSON object and absolutely nothing else. "
-    "Do not include any explanation, markdown formatting, code fences, or commentary. "
-    "Start your response with { and end with }."
-)
-
-
 def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     """AIで画像を解析（prefill方式でJSON確実取得）"""
     import anthropic
@@ -403,66 +280,37 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
                 {"type": "image", "source": {
                     "type": "base64", "media_type": media_type, "data": img_data
                 }},
-                {"type": "text", "text": EXTRACTION_PROMPT}
+                {"type": "text", "text": EXTRACTION_PROMPT},
             ]},
             # prefill: { を先置きすることでClaudeが必ずJSONを返す
-            {"role": "assistant", "content": "{"}
+            {"role": "assistant", "content": "{"},
         ]
     )
     # prefillの { を補って完全なJSONに
     text = "{" + message.content[0].text.strip()
 
-    # 最後の } の後を切り捨て（余分なテキストがあっても安全）
-    end = text.rfind('}')
-    if end != -1:
-        text = text[:end+1]
-    else:
+    # 最後の } 以降を切り捨て
+    end = text.rfind("}")
+    if end == -1:
         raise ValueError(f"AIの応答にJSONが含まれていません。応答内容：{text[:300]}")
+    text = text[:end + 1]
 
-    # 制御文字除去してJSONパース
-    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
+    # 制御文字を除去してパース
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
         raise ValueError(f"JSONの解析に失敗しました: {e}\n応答の先頭: {text[:300]}")
 
 
-def get_demo_data() -> dict:
-    return {
-        "title": "新サービス企画 ブレインストーミング",
-        "elements": [
-            {"id": "el_001", "type": "heading", "content": "対象のお客様",                  "level": 1, "confidence": 0.97},
-            {"id": "el_002", "type": "bullet",  "content": "20〜40代のビジネスパーソン",     "level": 2, "confidence": 0.95},
-            {"id": "el_003", "type": "bullet",  "content": "会議が多い職種（営業・企画・PM）","level": 2, "confidence": 0.93},
-            {"id": "el_004", "type": "heading", "content": "主な機能",                       "level": 1, "confidence": 0.98},
-            {"id": "el_005", "type": "bullet",  "content": "写真1枚でスライド自動生成",      "level": 2, "confidence": 0.97},
-            {"id": "el_006", "type": "bullet",  "content": "日本語・英語など多言語に対応",   "level": 2, "confidence": 0.94},
-            {"id": "el_007", "type": "bullet",  "content": "パワーポイント形式でダウンロード","level": 2, "confidence": 0.96},
-            {"id": "el_008", "type": "heading", "content": "料金プラン案",                   "level": 1, "confidence": 0.95},
-            {"id": "el_009", "type": "bullet",  "content": "無料プラン（月10枚まで）",       "level": 2, "confidence": 0.93},
-            {"id": "el_010", "type": "bullet",  "content": "有料プラン：月額1,980円",        "level": 2, "confidence": 0.91},
-        ],
-        "structure": {
-            "type": "list",
-            "groups": [
-                {"label": "対象のお客様", "items": ["el_001", "el_002", "el_003"]},
-                {"label": "主な機能",     "items": ["el_004", "el_005", "el_006", "el_007"]},
-                {"label": "料金プラン案", "items": ["el_008", "el_009", "el_010"]},
-            ]
-        },
-        "language": "ja",
-        "notes": "これは動作確認用のサンプルデータです。実際の写真で試すと、その内容が読み取られます。"
-    }
-
-
 def generate_pptx(data: dict) -> bytes:
-    """解析データからパワーポイントを生成（色・スタイル・表・ゾーン配置対応）"""
+    """解析データからパワーポイントを生成"""
     from pptx import Presentation
     from pptx.util import Inches, Pt
     from pptx.dml.color import RGBColor
     from pptx.enum.text import PP_ALIGN
 
-    # ─ カラーパレット（スライド背景用） ─
+    # ─ カラーパレット ─
     C_DARK   = RGBColor(0x0D, 0x1B, 0x2A)
     C_NAVY   = RGBColor(0x1B, 0x28, 0x38)
     C_ACCENT = RGBColor(0x00, 0xB4, 0xD8)
@@ -470,9 +318,9 @@ def generate_pptx(data: dict) -> bytes:
     C_MUTED  = RGBColor(0x94, 0xA3, 0xB8)
     C_LIGHT  = RGBColor(0xCB, 0xD5, 0xE1)
 
-    # ─ 文字色マッピング（手書きの色 → RGBColor） ─
+    # ─ 手書き色 → RGBColor ─
     TEXT_COLORS = {
-        "black":  RGBColor(0xF0, 0xF4, 0xF8),  # 背景が暗いので白系
+        "black":  RGBColor(0xF0, 0xF4, 0xF8),
         "white":  RGBColor(0xFF, 0xFF, 0xFF),
         "red":    RGBColor(0xFF, 0x6B, 0x6B),
         "blue":   RGBColor(0x64, 0xB5, 0xF6),
@@ -485,16 +333,12 @@ def generate_pptx(data: dict) -> bytes:
         "brown":  RGBColor(0xBC, 0xAA, 0xA4),
     }
 
-    def resolve_color(color_name: str) -> RGBColor:
-        return TEXT_COLORS.get((color_name or "black").lower(), C_LIGHT)
-
-    def pt_size(size_str: str) -> int:
-        return {"large": 16, "medium": 13, "small": 11}.get(size_str or "medium", 13)
+    def resolve_color(name: str) -> RGBColor:
+        return TEXT_COLORS.get((name or "black").lower(), C_LIGHT)
 
     prs = Presentation()
     prs.slide_width  = Inches(13.33)
     prs.slide_height = Inches(7.5)
-    blank = prs.slide_layouts[6]
 
     def bg(slide, color):
         fill = slide.background.fill
@@ -503,17 +347,23 @@ def generate_pptx(data: dict) -> bytes:
 
     def rect(slide, x, y, w, h, fc, lc=None):
         sh = slide.shapes.add_shape(1, Inches(x), Inches(y), Inches(w), Inches(h))
-        sh.fill.solid(); sh.fill.fore_color.rgb = fc
-        if lc: sh.line.color.rgb = lc
-        else:  sh.line.fill.background()
+        sh.fill.solid()
+        sh.fill.fore_color.rgb = fc
+        if lc:
+            sh.line.color.rgb = lc
+        else:
+            sh.line.fill.background()
 
     def txt(slide, text, x, y, w, h, size=13, bold=False, color=None,
             align=PP_ALIGN.LEFT, wrap=True, underline=False, italic=False):
         color = color or C_LIGHT
         tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
-        tf = tb.text_frame; tf.word_wrap = wrap
-        p = tf.paragraphs[0]; p.alignment = align
-        r = p.add_run(); r.text = text
+        tf = tb.text_frame
+        tf.word_wrap = wrap
+        p = tf.paragraphs[0]
+        p.alignment = align
+        r = p.add_run()
+        r.text           = text
         r.font.size      = Pt(size)
         r.font.bold      = bold
         r.font.underline = underline
@@ -522,16 +372,12 @@ def generate_pptx(data: dict) -> bytes:
         r.font.name      = "Noto Sans JP"
 
     def add_table_shape(slide, tbl_data, x, y, max_w, max_h):
-        """python-pptxで実際の表を作成"""
         headers = tbl_data.get("headers", [])
         rows    = tbl_data.get("rows", [])
-        if not rows and not headers:
+        if not headers and not rows:
             return
         n_rows = len(rows) + (1 if headers else 0)
-        n_cols = max(
-            len(headers),
-            max((len(r) for r in rows), default=1)
-        )
+        n_cols = max(len(headers), max((len(r) for r in rows), default=1))
         if n_rows == 0 or n_cols == 0:
             return
         col_w = min(max_w / n_cols, 2.5)
@@ -541,75 +387,62 @@ def generate_pptx(data: dict) -> bytes:
             Inches(x), Inches(y),
             Inches(col_w * n_cols), Inches(row_h * n_rows)
         ).table
-        # ヘッダー行
         if headers:
             for ci, h in enumerate(headers[:n_cols]):
                 cell = tbl.cell(0, ci)
                 cell.text = str(h)
-                cell.fill.solid(); cell.fill.fore_color.rgb = C_ACCENT
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = C_ACCENT
                 for para in cell.text_frame.paragraphs:
                     for run in para.runs:
-                        run.font.bold = True
-                        run.font.size = Pt(11)
+                        run.font.bold      = True
+                        run.font.size      = Pt(11)
                         run.font.color.rgb = C_DARK
-        # データ行
         for ri, row in enumerate(rows):
             tr = ri + (1 if headers else 0)
             for ci, val in enumerate(row[:n_cols]):
                 cell = tbl.cell(tr, ci)
                 cell.text = str(val)
                 bg_col = RGBColor(0x1E, 0x30, 0x40) if ri % 2 == 0 else C_NAVY
-                cell.fill.solid(); cell.fill.fore_color.rgb = bg_col
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = bg_col
                 for para in cell.text_frame.paragraphs:
                     for run in para.runs:
-                        run.font.size = Pt(10)
+                        run.font.size      = Pt(10)
                         run.font.color.rgb = C_LIGHT
 
-    # ━━━━━ スライド作成 ━━━━━
-    s = prs.slides.add_slide(blank)
+    # ── スライド作成 ──
+    s = prs.slides.add_slide(prs.slide_layouts[6])
     bg(s, C_DARK)
     rect(s, 0, 0, 13.33, 0.07, C_ACCENT)
 
-    # タイトル
     title = data.get("title", "ホワイトボードメモ")
     txt(s, title, 0.4, 0.10, 12.0, 0.72, size=24, bold=True, color=C_WHITE)
-
-    # 日時
-    ts = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-    txt(s, f"変換日時：{ts}", 0.4, 0.78, 6.0, 0.32, size=9, color=C_MUTED)
-
-    # コンテンツ背景
+    ts_label = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    txt(s, f"変換日時：{ts_label}", 0.4, 0.78, 6.0, 0.32, size=9, color=C_MUTED)
     rect(s, 0.3, 1.15, 12.73, 5.7, C_NAVY)
 
-    # ─ 要素を zone_row × zone_col でソートして読み取り順を保持 ─
-    elements = data.get("elements", [])
+    # ─ 要素を zone 順にソート ─
+    elements   = data.get("elements", [])
+    sorted_els = sorted(elements, key=lambda e: (
+        (e.get("position") or {}).get("zone_row", 1),
+        (e.get("position") or {}).get("zone_col", 0),
+    ))
 
-    def sort_key(el):
-        pos = el.get("position") or {}
-        return (pos.get("zone_row", 1), pos.get("zone_col", 0))
-
-    sorted_els = sorted(elements, key=sort_key)
-
-    # ─ 表は別途処理 ─
-    tables_data = data.get("tables", [])
-
-    # ─ zone_col で左右カラムに分割 ─
+    # ─ 左右カラムに振り分け ─
     col_left  = [e for e in sorted_els if (e.get("position") or {}).get("zone_col", 0) <= 1]
     col_right = [e for e in sorted_els if (e.get("position") or {}).get("zone_col", 2) == 2]
-    # 右カラムが少ない場合は左カラムを分割
-    if len(col_right) == 0 and len(col_left) > 3:
+    if not col_right and len(col_left) > 3:
         mid       = len(col_left) // 2
         col_right = col_left[mid:]
         col_left  = col_left[:mid]
 
-    # ─ 利用可能な高さから1要素あたりの行高を自動計算 ─
+    # ─ 行高・フォントサイズを要素数から自動計算 ─
     Y_START = 1.25
     Y_MAX   = 6.65
-    AVAIL_H = Y_MAX - Y_START          # 5.4 インチ
+    AVAIL_H = Y_MAX - Y_START
     max_col = max(len(col_left), len(col_right), 1)
-    # 1行あたりの高さ：最小0.28"、最大0.52"
     step_h  = max(0.28, min(0.52, AVAIL_H / max_col))
-    # フォントサイズをステップ幅から逆算（比例縮小）
     base_pt = max(8, min(14, int(step_h * 26)))
 
     def render_column(items, x_start, col_w):
@@ -624,38 +457,30 @@ def generate_pptx(data: dict) -> bytes:
             bold    = style.get("bold", False) or (etype == "heading")
             underl  = style.get("underline", False)
             circled = style.get("circled", False)
-            # スタイル指定のサイズをベースptに対して相対調整
-            size_map = {"large": base_pt + 2, "medium": base_pt, "small": base_pt - 2}
-            size = size_map.get(style.get("size", "medium"), base_pt)
-            row_h = step_h
+            size    = {"large": base_pt + 2, "medium": base_pt, "small": base_pt - 2}.get(
+                          style.get("size", "medium"), base_pt)
 
             if etype == "heading":
-                size = min(size + 2, base_pt + 3)
                 label = f"【{content}】" if circled else content
-                txt(s, label, x_start, y, col_w, row_h,
-                    size=size, bold=True, color=color, underline=underl)
+                txt(s, label, x_start, y, col_w, step_h,
+                    size=min(size + 2, base_pt + 3), bold=True, color=color, underline=underl)
             elif etype == "arrow":
-                txt(s, f"→ {content}", x_start + 0.1, y, col_w - 0.1, row_h,
+                txt(s, f"→ {content}", x_start + 0.1, y, col_w - 0.1, step_h,
                     size=max(size - 1, 8), color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
             else:
                 prefix = "○ " if circled else "• "
-                txt(s, f"{prefix}{content}", x_start + 0.1, y, col_w - 0.1, row_h,
+                txt(s, f"{prefix}{content}", x_start + 0.1, y, col_w - 0.1, step_h,
                     size=size, bold=bold, color=color, underline=underl)
-
-            y += row_h
+            y += step_h
 
     render_column(col_left,  0.45, 6.0)
     render_column(col_right, 6.75, 6.0)
 
-    # ─ 表を下部またはゾーン位置に配置 ─
-    tbl_y = 1.25
-    tbl_x = 0.45
-    for tbl_data in tables_data:
-        pos    = tbl_data.get("position") or {}
-        row_z  = pos.get("zone_row", 2)
-        col_z  = pos.get("zone_col", 0)
-        tbl_y  = 1.25 + row_z * 1.8
-        tbl_x  = 0.45 + col_z * 4.3
+    # ─ 表を配置 ─
+    for tbl_data in data.get("tables", []):
+        pos   = tbl_data.get("position") or {}
+        tbl_y = 1.25 + pos.get("zone_row", 2) * 1.8
+        tbl_x = 0.45 + pos.get("zone_col", 0) * 4.3
         add_table_shape(s, tbl_data, tbl_x, tbl_y, max_w=5.5, max_h=1.8)
 
     # フッター
@@ -672,7 +497,6 @@ def generate_pptx(data: dict) -> bytes:
 # ─── 画面表示 ────────────────────────────────────────────
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# ── ロゴ・説明 ──
 st.markdown("""
 <div class='top-bar'>
   <div class='top-bar-logo'>パシャッ<em>と</em></div>
@@ -696,7 +520,7 @@ if not get_api_key():
             st.success("設定できました")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ステップ１　写真を用意する
+# ステップ１　写真を選ぶ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 st.markdown(
     "<div class='step'><span class='snum'>１</span>写真を選ぶ</div>",
@@ -704,6 +528,7 @@ st.markdown(
 st.markdown(
     "<div class='hint'>ホワイトボードや手書きメモを、<strong>正面から</strong>撮った写真を選んでください。</div>",
     unsafe_allow_html=True)
+
 uploaded_file = st.file_uploader(
     "画像ファイルを選ぶ",
     type=["jpg", "jpeg", "png", "webp"],
@@ -711,17 +536,14 @@ uploaded_file = st.file_uploader(
     help="JPG・PNG・WebP 形式の画像に対応しています。",
 )
 
-raw_input = uploaded_file
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 画像プレビュー ＆ 余白カット
+# 画像プレビュー ＆ 前処理
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-pil_image  = None
 img_data   = None
 media_type = "image/jpeg"
 
-if raw_input:
-    pil_image = Image.open(raw_input)
+if uploaded_file:
+    pil_image = Image.open(uploaded_file)
     if pil_image.mode != "RGB":
         pil_image = pil_image.convert("RGB")
 
@@ -735,20 +557,17 @@ if raw_input:
 
     display_img = preprocess_image(pil_image, do_trim=do_trim)
     st.image(display_img, caption="変換する写真", use_container_width=True)
-
     img_data, media_type = pil_to_base64(display_img)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ステップ２　スライドに変換する
+# ステップ２　変換する
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 st.markdown("---")
 st.markdown(
     "<div class='step'><span class='snum'>２</span>変換する</div>",
     unsafe_allow_html=True)
 
-can_convert = bool(raw_input)
-
-if not can_convert:
+if not uploaded_file:
     st.markdown(
         "<div class='hint' style='border-color:#F5A623; background:#FFF8E7;'>"
         "↑ まず写真を選んでください。"
@@ -759,72 +578,59 @@ convert_btn = st.button(
     "✨　スライドに変換する",
     type="primary",
     use_container_width=True,
-    disabled=not can_convert,
+    disabled=not uploaded_file,
 )
-
-demo_btn = False
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 変換処理
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-if demo_btn:
-    st.session_state["extracted"]  = get_demo_data()
-    st.session_state["pptx_bytes"] = generate_pptx(get_demo_data())
-    st.session_state["is_demo"]    = True
-    st.rerun()
-
 if convert_btn and img_data:
-    st.session_state["is_demo"] = False
     try:
         api_key = get_api_key()
         if not api_key:
             st.warning("認証キーが設定されていません。左上のメニューから設定してください。")
             st.stop()
 
-        status_text = st.empty()
-        progress_bar = st.progress(0)
+        status   = st.empty()
+        progress = st.progress(0)
 
-        status_text.markdown("**① 写真を準備しています…**")
-        progress_bar.progress(15)
-
-        status_text.markdown("**② 写真を読み取っています…**")
-        progress_bar.progress(35)
+        status.markdown("**① 写真を準備しています…**")
+        progress.progress(15)
+        status.markdown("**② 写真を読み取っています…**")
+        progress.progress(35)
 
         extracted = analyze_with_claude(img_data, media_type, api_key)
 
-        status_text.markdown("**③ 文字の読み取りが完了しました ✅**")
-        progress_bar.progress(75)
-
-        status_text.markdown("**④ スライドを作成しています…**")
-        progress_bar.progress(90)
+        status.markdown("**③ 文字の読み取りが完了しました ✅**")
+        progress.progress(75)
+        status.markdown("**④ スライドを作成しています…**")
+        progress.progress(90)
 
         st.session_state["extracted"]  = extracted
         st.session_state["pptx_bytes"] = generate_pptx(extracted)
 
-        progress_bar.progress(100)
-        status_text.markdown("**✅ 完了しました！下にスクロールして保存してください。**")
+        progress.progress(100)
+        status.markdown("**✅ 完了しました！下にスクロールして保存してください。**")
 
     except Exception as e:
-            err_msg = str(e)
-            if "api_key" in err_msg.lower() or "authentication" in err_msg.lower() or "401" in err_msg:
-                st.error("認証キーが正しくありません。左上のメニューから確認してください。")
-            elif "JSONDecodeError" in type(e).__name__ or "json" in err_msg.lower() or "JSON" in err_msg or "応答" in err_msg:
-                st.error(f"文字の読み取り結果を処理できませんでした。もう一度お試しください。\n（詳細：{err_msg[:200]}）")
-            elif "timeout" in err_msg.lower() or "connection" in err_msg.lower():
-                st.error("通信エラーが発生しました。インターネット接続をご確認のうえ、もう一度お試しください。")
-            elif "overloaded" in err_msg.lower() or "529" in err_msg:
-                st.error("AIサーバーが混み合っています。しばらく待ってから、もう一度お試しください。")
-            else:
-                st.error(f"エラーが発生しました。もう一度お試しください。\n（詳細：{err_msg}）")
-            st.info("「写真なしで動きを確認してみる」ボタンを押すと、サンプルでお試しいただけます。")
+        err_msg = str(e)
+        if "api_key" in err_msg.lower() or "authentication" in err_msg.lower() or "401" in err_msg:
+            st.error("認証キーが正しくありません。左上のメニューから確認してください。")
+        elif "json" in err_msg.lower() or "JSON" in err_msg or "応答" in err_msg:
+            st.error(f"文字の読み取り結果を処理できませんでした。もう一度お試しください。\n（詳細：{err_msg[:200]}）")
+        elif "timeout" in err_msg.lower() or "connection" in err_msg.lower():
+            st.error("通信エラーが発生しました。インターネット接続をご確認のうえ、もう一度お試しください。")
+        elif "overloaded" in err_msg.lower() or "529" in err_msg:
+            st.error("AIサーバーが混み合っています。しばらく待ってから、もう一度お試しください。")
+        else:
+            st.error(f"エラーが発生しました。もう一度お試しください。\n（詳細：{err_msg}）")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ステップ３　スライドを保存する
+# ステップ３　保存する
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 if "extracted" in st.session_state:
     extracted  = st.session_state["extracted"]
     pptx_bytes = st.session_state.get("pptx_bytes")
-    is_demo    = st.session_state.get("is_demo", False)
 
     st.markdown("---")
     st.markdown(
@@ -832,11 +638,9 @@ if "extracted" in st.session_state:
         unsafe_allow_html=True)
 
     el_count = len(extracted.get("elements", []))
-    demo_note = "（サンプル）" if is_demo else ""
-
     st.markdown(f"""
 <div class='done-box'>
-✅ 完了{demo_note}　読み取り：<strong>{el_count} 件</strong>
+✅ 完了　読み取り：<strong>{el_count} 件</strong>
 </div>
 """, unsafe_allow_html=True)
 
@@ -866,10 +670,8 @@ if "extracted" in st.session_state:
                         unsafe_allow_html=True)
         st.markdown("---")
         json_str = json.dumps(
-            {"バージョン": "1.0",
-             "変換日時": datetime.now().isoformat(),
-             "データ": extracted},
-            ensure_ascii=False, indent=2
+            {"バージョン": "1.0", "変換日時": datetime.now().isoformat(), "データ": extracted},
+            ensure_ascii=False, indent=2,
         )
         st.download_button(
             label="📄　テキストで保存する",
