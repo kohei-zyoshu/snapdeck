@@ -35,27 +35,39 @@ a[href*="streamlit.io"] { display: none !important; }
 
 /* ── 全体背景 ── */
 .stApp { background: #F4F7FA; }
-.main .block-container { padding: 1.4rem 1rem 5rem; max-width: 560px; }
+.main .block-container { padding: 0 1rem 5rem; max-width: 560px; }
 
-/* ── ロゴ・タイトル ── */
-.logo {
-    text-align: center;
-    font-size: 3rem;
+/* ── 固定ヘッダーバー ── */
+.top-bar {
+    position: sticky;
+    top: 0;
+    z-index: 999;
+    background: #0D1B2A;
+    padding: 0.55rem 1.2rem;
+    margin: 0 -1rem 1.6rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+}
+.top-bar-logo {
+    font-size: 1.55rem;
     font-weight: 900;
-    color: #0D1B2A;
-    margin-bottom: 0.1rem;
-    line-height: 1.2;
+    color: #ffffff;
     letter-spacing: -0.01em;
+    line-height: 1;
 }
-.logo em { color: #0099BB; font-style: normal; }
-.tagline {
-    text-align: center;
-    color: #4A6475;
-    font-size: 1.15rem;
-    margin-bottom: 0.6rem;
-    line-height: 1.6;
+.top-bar-logo em { color: #0099BB; font-style: normal; }
+.top-bar-tagline {
+    font-size: 0.88rem;
+    color: #90B8C8;
     font-weight: 500;
+    line-height: 1.3;
 }
+
+/* ── ロゴ・タイトル（旧：使用停止） ── */
+.logo { display: none; }
+.tagline { display: none; }
 .sub-tagline {
     text-align: center;
     color: #7A9AAD;
@@ -664,8 +676,10 @@ def generate_pptx(data: dict) -> bytes:
 
 # ── ロゴ・説明 ──
 st.markdown("""
-<div class='logo'>パシャッ<em>と</em></div>
-<div class='tagline'>メモの写真を、スライドに変換します</div>
+<div class='top-bar'>
+  <div class='top-bar-logo'>パシャッ<em>と</em></div>
+  <div class='top-bar-tagline'>メモの写真を<br>スライドに変換</div>
+</div>
 """, unsafe_allow_html=True)
 
 # ── APIキー入力（未設定時のみサイドバーに表示） ──
