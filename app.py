@@ -3,11 +3,12 @@
 ホワイトボード・手書きメモ → スライド自動変換
 """
 
-import os, io, json, base64, re
+import os, io, json, base64, re, math
 from datetime import datetime
 
+import numpy as np
 import streamlit as st
-from PIL import Image, ImageChops, ImageEnhance, ImageFilter
+from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps
 
 # ─── ページ設定 ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -238,6 +239,48 @@ def get_api_key() -> str:
     return st.session_state.get("api_key_input", "").strip()
 
 
+def fix_orientation(img: Image.Image) -> Image.Image:
+    """EXIFの向き情報を使って自動回転（スマホ写真の天地補正）"""
+    try:
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        pass
+    return img
+
+
+def deskew_image(img: Image.Image) -> Image.Image:
+    """投影プロファイル法で傾きを検出・補正する"""
+    try:
+        gray = np.array(img.convert("L"))
+        # 二値化（文字=0, 背景=255）
+        binary = (gray < 128).astype(np.uint8)
+        best_angle = 0.0
+        best_score = -1.0
+        # -10° ～ +10° の範囲で0.5°刻みに探索
+        for angle in np.arange(-10, 10.5, 0.5):
+            rad = math.radians(angle)
+            cos_a, sin_a = math.cos(rad), math.sin(rad)
+            h, w = binary.shape
+            # 各行について回転後のy座標にマッピングして水平投影
+            rotated_sum = np.zeros(h + w)
+            for y in range(h):
+                for x in range(w):
+                    if binary[y, x]:
+                        ny = int(y * cos_a - x * sin_a) + w
+                        if 0 <= ny < len(rotated_sum):
+                            rotated_sum[ny] += 1
+            score = float(np.var(rotated_sum))
+            if score > best_score:
+                best_score = score
+                best_angle = angle
+        if abs(best_angle) > 0.3:
+            img = img.rotate(-best_angle, expand=True,
+                             fillcolor=(255, 255, 255), resample=Image.BICUBIC)
+    except Exception:
+        pass
+    return img
+
+
 def auto_trim(img: Image.Image, margin: int = 30) -> Image.Image:
     """白い余白を自動でカット（読み取り精度向上）"""
     if img.mode != "RGB":
@@ -256,20 +299,24 @@ def auto_trim(img: Image.Image, margin: int = 30) -> Image.Image:
 
 def enhance_for_ocr(img: Image.Image) -> Image.Image:
     """OCR精度を上げるための画像前処理（コントラスト・シャープネス強化）"""
-    # コントラスト強化
     img = ImageEnhance.Contrast(img).enhance(1.5)
-    # シャープネス強化
     img = ImageEnhance.Sharpness(img).enhance(2.0)
-    # 明るさを微調整（暗すぎる写真を補正）
     img = ImageEnhance.Brightness(img).enhance(1.1)
+    return img
+
+
+def preprocess_image(img: Image.Image, do_trim: bool = True) -> Image.Image:
+    """全前処理をまとめて実行: EXIF回転 → トリミング → デスキュー → 画質強化"""
+    img = fix_orientation(img)
+    if do_trim:
+        img = auto_trim(img)
+    img = deskew_image(img)
     return img
 
 
 def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
     """PIL Image → base64（高解像度維持・OCR前処理済み）"""
-    # OCR精度向上のための前処理
     img = enhance_for_ocr(img)
-    # 大きすぎる画像は縮小（API上限対策）
     if img.width > max_px or img.height > max_px:
         img.thumbnail((max_px, max_px), Image.LANCZOS)
     buf = io.BytesIO()
@@ -278,44 +325,69 @@ def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
 
 
 EXTRACTION_PROMPT = """
-あなたはOCRと文書構造解析の専門家です。
-添付の画像（ホワイトボード・手書きメモ・印刷物など）を注意深く分析し、
-すべての文字・記号・数字を漏れなく読み取ってください。
+あなたはOCRと文書レイアウト解析の専門家です。
+添付の画像（ホワイトボード・手書きメモ・印刷物など）を精密に分析し、
+アナログ文書をデジタルで忠実に再現するためのすべての情報を抽出してください。
 
-【重要な読み取りルール】
-- かすれた文字、薄い文字も最大限推測して読み取ること
-- 矢印（→ ← ↑ ↓）、丸囲み、下線なども構造の手がかりとして活用すること
-- 誤字と思われる文字もそのまま記録すること
-- 日本語・英語・数字・記号を問わず、すべて抽出すること
-- 画像の端や隅に小さく書かれた文字も見落とさないこと
+【読み取り対象】
+1. すべての文字・数字・記号（かすれ・薄い・小さい文字も含む）
+2. 文字の色（黒・赤・青・緑・オレンジ・紫・ピンク・茶色・グレー等）
+3. 文字スタイル（太字・下線・丸囲み・二重線・取り消し線）
+4. ページ上の位置（上段/中段/下段 × 左/中央/右 の9ゾーン）
+5. 表・罫線の構造（ヘッダー行・データ行・列の区分け）
+6. 矢印・接続線・囲み図形
+7. 文字と文字の間隔（密集/通常/広め）
+8. 画像全体の傾き（補正が必要な角度）
 
-以下のJSON形式のみで返答してください（説明文・前置き・コードブロック不要）:
+以下のJSON形式のみで返答してください（前置き・説明文・コードブロック不要）:
 
 {
-  "title": "メモ全体のタイトルまたは主題（画像から推定）",
+  "title": "文書のタイトルまたは主題（画像から推定）",
+  "orientation_degrees": 0,
   "elements": [
     {
       "id": "el_001",
       "type": "heading",
       "content": "読み取ったテキスト",
+      "position": { "zone_row": 0, "zone_col": 0 },
+      "style": {
+        "color": "black",
+        "bold": false,
+        "underline": false,
+        "circled": false,
+        "strikethrough": false,
+        "size": "large"
+      },
       "level": 1,
       "confidence": 0.95
+    }
+  ],
+  "tables": [
+    {
+      "id": "tbl_001",
+      "position": { "zone_row": 1, "zone_col": 1 },
+      "headers": ["列名1", "列名2"],
+      "rows": [["データ1", "データ2"], ["データ3", "データ4"]]
     }
   ],
   "structure": {
     "type": "list",
     "groups": [
-      {
-        "label": "グループ名",
-        "items": ["el_001", "el_002"]
-      }
+      { "label": "グループ名", "items": ["el_001", "el_002"] }
     ]
   },
   "language": "ja",
-  "notes": "読み取れなかった箇所や補足があれば記載"
+  "notes": "読み取れなかった箇所や補足"
 }
 
-typeは heading（大見出し）/ bullet（箇条書き）/ text（通常テキスト）/ table_row（表の行）のいずれか。
+【フィールドの定義】
+- orientation_degrees: 画像を正位置にするために必要な回転角度（0/90/180/270）
+- zone_row: 0=上段, 1=中段, 2=下段
+- zone_col: 0=左, 1=中央, 2=右
+- type: heading（見出し）/ bullet（箇条書き）/ text（本文）/ table（表）/ arrow（矢印・接続）
+- color: black / red / blue / green / orange / purple / pink / gray / brown / yellow
+- size: large（大）/ medium（中）/ small（小）
+- tablesがない場合は空配列 [] を返すこと
 """
 
 
@@ -373,18 +445,42 @@ def get_demo_data() -> dict:
 
 
 def generate_pptx(data: dict) -> bytes:
-    """解析データからパワーポイントを生成"""
+    """解析データからパワーポイントを生成（色・スタイル・表・ゾーン配置対応）"""
     from pptx import Presentation
-    from pptx.util import Inches, Pt
+    from pptx.util import Inches, Pt, Emu
     from pptx.dml.color import RGBColor
     from pptx.enum.text import PP_ALIGN
+    from pptx.oxml.ns import qn
+    from lxml import etree
 
+    # ─ カラーパレット（スライド背景用） ─
     C_DARK   = RGBColor(0x0D, 0x1B, 0x2A)
     C_NAVY   = RGBColor(0x1B, 0x28, 0x38)
     C_ACCENT = RGBColor(0x00, 0xB4, 0xD8)
     C_WHITE  = RGBColor(0xFF, 0xFF, 0xFF)
-    C_LIGHT  = RGBColor(0xCB, 0xD5, 0xE1)
     C_MUTED  = RGBColor(0x94, 0xA3, 0xB8)
+    C_LIGHT  = RGBColor(0xCB, 0xD5, 0xE1)
+
+    # ─ 文字色マッピング（手書きの色 → RGBColor） ─
+    TEXT_COLORS = {
+        "black":  RGBColor(0xF0, 0xF4, 0xF8),  # 背景が暗いので白系
+        "white":  RGBColor(0xFF, 0xFF, 0xFF),
+        "red":    RGBColor(0xFF, 0x6B, 0x6B),
+        "blue":   RGBColor(0x64, 0xB5, 0xF6),
+        "green":  RGBColor(0x81, 0xC7, 0x84),
+        "yellow": RGBColor(0xFF, 0xF1, 0x76),
+        "orange": RGBColor(0xFF, 0xB7, 0x4D),
+        "purple": RGBColor(0xCE, 0x93, 0xD8),
+        "pink":   RGBColor(0xF4, 0x8F, 0xB1),
+        "gray":   RGBColor(0xB0, 0xBE, 0xC5),
+        "brown":  RGBColor(0xBC, 0xAA, 0xA4),
+    }
+
+    def resolve_color(color_name: str) -> RGBColor:
+        return TEXT_COLORS.get((color_name or "black").lower(), C_LIGHT)
+
+    def pt_size(size_str: str) -> int:
+        return {"large": 16, "medium": 13, "small": 11}.get(size_str or "medium", 13)
 
     prs = Presentation()
     prs.slide_width  = Inches(13.33)
@@ -397,85 +493,158 @@ def generate_pptx(data: dict) -> bytes:
         fill.fore_color.rgb = color
 
     def rect(slide, x, y, w, h, fc, lc=None):
-        s = slide.shapes.add_shape(1, Inches(x), Inches(y), Inches(w), Inches(h))
-        s.fill.solid(); s.fill.fore_color.rgb = fc
-        if lc: s.line.color.rgb = lc
-        else:  s.line.fill.background()
+        sh = slide.shapes.add_shape(1, Inches(x), Inches(y), Inches(w), Inches(h))
+        sh.fill.solid(); sh.fill.fore_color.rgb = fc
+        if lc: sh.line.color.rgb = lc
+        else:  sh.line.fill.background()
 
-    def txt(slide, text, x, y, w, h, size=14, bold=False, color=None,
-            align=PP_ALIGN.LEFT, wrap=True):
-        color = color or C_WHITE
+    def txt(slide, text, x, y, w, h, size=13, bold=False, color=None,
+            align=PP_ALIGN.LEFT, wrap=True, underline=False, italic=False):
+        color = color or C_LIGHT
         tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
         tf = tb.text_frame; tf.word_wrap = wrap
         p = tf.paragraphs[0]; p.alignment = align
         r = p.add_run(); r.text = text
-        r.font.size = Pt(size); r.font.bold = bold
-        r.font.color.rgb = color; r.font.name = "Arial"
+        r.font.size      = Pt(size)
+        r.font.bold      = bold
+        r.font.underline = underline
+        r.font.italic    = italic
+        r.font.color.rgb = color
+        r.font.name      = "Yu Gothic UI" if any(ord(c) > 127 for c in text) else "Arial"
 
-    # ── 1枚のスライドに全内容を集約 ──
+    def add_table_shape(slide, tbl_data, x, y, max_w, max_h):
+        """python-pptxで実際の表を作成"""
+        headers = tbl_data.get("headers", [])
+        rows    = tbl_data.get("rows", [])
+        if not rows and not headers:
+            return
+        n_rows = len(rows) + (1 if headers else 0)
+        n_cols = max(
+            len(headers),
+            max((len(r) for r in rows), default=1)
+        )
+        if n_rows == 0 or n_cols == 0:
+            return
+        col_w = min(max_w / n_cols, 2.5)
+        row_h = min(max_h / n_rows, 0.45)
+        tbl = slide.shapes.add_table(
+            n_rows, n_cols,
+            Inches(x), Inches(y),
+            Inches(col_w * n_cols), Inches(row_h * n_rows)
+        ).table
+        # ヘッダー行
+        if headers:
+            for ci, h in enumerate(headers[:n_cols]):
+                cell = tbl.cell(0, ci)
+                cell.text = str(h)
+                cell.fill.solid(); cell.fill.fore_color.rgb = C_ACCENT
+                for para in cell.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.font.bold = True
+                        run.font.size = Pt(11)
+                        run.font.color.rgb = C_DARK
+        # データ行
+        for ri, row in enumerate(rows):
+            tr = ri + (1 if headers else 0)
+            for ci, val in enumerate(row[:n_cols]):
+                cell = tbl.cell(tr, ci)
+                cell.text = str(val)
+                bg_col = RGBColor(0x1E, 0x30, 0x40) if ri % 2 == 0 else C_NAVY
+                cell.fill.solid(); cell.fill.fore_color.rgb = bg_col
+                for para in cell.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.font.size = Pt(10)
+                        run.font.color.rgb = C_LIGHT
+
+    # ━━━━━ スライド作成 ━━━━━
     s = prs.slides.add_slide(blank)
     bg(s, C_DARK)
-
-    # 上部アクセントライン
     rect(s, 0, 0, 13.33, 0.07, C_ACCENT)
 
     # タイトル
     title = data.get("title", "ホワイトボードメモ")
-    txt(s, title, 0.4, 0.12, 12.5, 0.75, size=26, bold=True)
+    txt(s, title, 0.4, 0.10, 12.0, 0.72, size=24, bold=True, color=C_WHITE)
 
-    # 日時ラベル
+    # 日時
     ts = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-    txt(s, f"変換日時：{ts}", 0.4, 0.82, 8.0, 0.35, size=10, color=C_MUTED)
+    txt(s, f"変換日時：{ts}", 0.4, 0.78, 6.0, 0.32, size=9, color=C_MUTED)
 
     # コンテンツ背景
-    rect(s, 0.3, 1.2, 12.73, 5.65, C_NAVY)
+    rect(s, 0.3, 1.15, 12.73, 5.7, C_NAVY)
 
-    # 全要素を左右2カラムに振り分けて配置
+    # ─ 要素を zone_row × zone_col でソートして読み取り順を保持 ─
     elements = data.get("elements", [])
-    elements_by_id = {el["id"]: el for el in elements}
 
-    # グループを使わず全要素を順番に並べる
-    all_items = []
-    groups = data.get("structure", {}).get("groups", [])
-    if groups:
-        for group in groups:
-            lbl = group.get("label", "")
-            if lbl:
-                all_items.append({"type": "heading", "content": lbl})
-            for iid in group.get("items", []):
-                el = elements_by_id.get(iid)
-                if el:
-                    all_items.append(el)
-    else:
-        all_items = elements
+    def sort_key(el):
+        pos = el.get("position") or {}
+        return (pos.get("zone_row", 1), pos.get("zone_col", 0))
 
-    # 2カラム配置
-    mid = max(1, len(all_items) // 2)
-    col_left  = all_items[:mid]
-    col_right = all_items[mid:]
+    sorted_els = sorted(elements, key=sort_key)
 
-    def render_col(items, x_start, col_w):
-        y = 1.3
+    # ─ 表は別途処理 ─
+    tables_data = data.get("tables", [])
+
+    # ─ zone_col で左右カラムに分割 ─
+    col_left  = [e for e in sorted_els if (e.get("position") or {}).get("zone_col", 0) <= 1]
+    col_right = [e for e in sorted_els if (e.get("position") or {}).get("zone_col", 2) == 2]
+    # 右カラムが少ない場合は左カラムを分割
+    if len(col_right) == 0 and len(col_left) > 3:
+        mid       = len(col_left) // 2
+        col_right = col_left[mid:]
+        col_left  = col_left[:mid]
+
+    def render_column(items, x_start, col_w, y_start=1.25, y_max=6.65):
+        y = y_start
         for el in items:
-            if el.get("type") == "heading":
-                if y > 1.3: y += 0.05
-                txt(s, el.get("content", ""), x_start, y, col_w, 0.45,
-                    size=15, bold=True, color=C_ACCENT)
-                y += 0.5
-            else:
-                content = "• " + el.get("content", "")
-                txt(s, content, x_start + 0.1, y, col_w - 0.1, 0.4,
-                    size=12, color=C_LIGHT)
-                y += 0.43
-            if y > 6.65: break
+            if y >= y_max:
+                break
+            etype   = el.get("type", "text")
+            content = el.get("content", "")
+            style   = el.get("style") or {}
+            color   = resolve_color(style.get("color", "black"))
+            bold    = style.get("bold", False) or (etype == "heading")
+            underl  = style.get("underline", False)
+            circled = style.get("circled", False)
+            size    = pt_size(style.get("size", "medium"))
 
-    render_col(col_left,  0.45, 6.05)
-    render_col(col_right, 6.7,  6.05)
+            if etype == "heading":
+                size = max(size, 15)
+                if y > y_start:
+                    y += 0.06
+                label = f"【{content}】" if circled else content
+                txt(s, label, x_start, y, col_w, 0.48,
+                    size=size, bold=True, color=color, underline=underl)
+                y += 0.52
+            elif etype == "arrow":
+                txt(s, f"→ {content}", x_start + 0.1, y, col_w - 0.1, 0.38,
+                    size=size - 1, bold=False, color=RGBColor(0xFF, 0xB7, 0x4D),
+                    italic=True)
+                y += 0.42
+            else:
+                prefix = "○ " if circled else "• "
+                label  = f"{prefix}{content}"
+                txt(s, label, x_start + 0.1, y, col_w - 0.1, 0.40,
+                    size=size, bold=bold, color=color, underline=underl)
+                y += 0.44
+
+    render_column(col_left,  0.45, 6.0)
+    render_column(col_right, 6.75, 6.0)
+
+    # ─ 表を下部またはゾーン位置に配置 ─
+    tbl_y = 1.25
+    tbl_x = 0.45
+    for tbl_data in tables_data:
+        pos    = tbl_data.get("position") or {}
+        row_z  = pos.get("zone_row", 2)
+        col_z  = pos.get("zone_col", 0)
+        tbl_y  = 1.25 + row_z * 1.8
+        tbl_x  = 0.45 + col_z * 4.3
+        add_table_shape(s, tbl_data, tbl_x, tbl_y, max_w=5.5, max_h=1.8)
 
     # フッター
     rect(s, 0, 7.15, 13.33, 0.35, C_NAVY)
-    txt(s, "パシャッと  |  自動生成", 0.4, 7.15, 12.9, 0.35,
-        size=10, color=C_MUTED, align=PP_ALIGN.RIGHT)
+    txt(s, "パシャッと  |  自動生成", 0.4, 7.17, 12.9, 0.30,
+        size=9, color=C_MUTED, align=PP_ALIGN.RIGHT)
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -550,11 +719,12 @@ if raw_input:
     do_trim = st.toggle(
         "✂️　余白を自動でカットして、文字を読み取りやすくする（おすすめ）",
         value=True,
-        help="写真の周囲にある白い余白や余分な部分を自動で除去します。読み取り精度が上がります。",
+        help="写真の周囲にある白い余白や余分な部分を自動で除去します。傾き補正・天地補正も同時に行います。",
     )
 
-    display_img = auto_trim(pil_image) if do_trim else pil_image
-    st.image(display_img, caption="この写真を変換します", use_container_width=True)
+    # EXIF天地補正 → トリミング → 傾き補正 → プレビュー
+    display_img = preprocess_image(pil_image, do_trim=do_trim)
+    st.image(display_img, caption="この写真を変換します（天地・傾き補正済み）", use_container_width=True)
 
     img_data, media_type = pil_to_base64(display_img)
 
