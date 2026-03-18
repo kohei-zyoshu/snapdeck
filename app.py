@@ -246,12 +246,24 @@ def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
 
 
 EXTRACTION_PROMPT = """あなたは優秀なOCRエンジンです。
-この画像（ホワイトボード・手書きメモ・付箋など）に書かれた**すべての文字・数字・記号**を正確に読み取り、以下のJSON形式のみで返してください。
+この画像（ホワイトボード・手書きメモ・付箋など）を以下の手順で解析し、JSON形式のみで返してください。
+
+【解析手順】
+STEP1 — X軸（横方向）の構造把握:
+  画像を横断し、コンテンツが何列あるか確認する（1列 / 2列 / 複数列）。
+  列の境界（列間の余白）がどこにあるか、x座標で把握する。
+
+STEP2 — Y軸（縦方向）のスキャン:
+  画像を上から下へスキャンし、テキスト行と「行間の余白（空白）」を識別する。
+  行間の余白が大きければ y 座標の差も大きく、詰まっていれば差は小さくなるよう座標を設定する。
+
+STEP3 — 各要素の精密読み取り:
+  各テキスト要素について、文字を正確に読み、左端(x)・上端(y)・幅(w)・高さ(h)を0.0〜1.0で記録する。
 
 【座標ルール】
-- 画像の左上を(0,0)、右下を(1,1)として正規化
-- x=テキスト領域の左端、y=テキスト領域の上端、w=幅、h=高さ（すべて0.0〜1.0）
-- 画像を上から下・左から右の順に読み、yの値が上の要素ほど小さくなるよう注意
+- 画像の左上=(0,0)、右下=(1,1)
+- x=左端, y=上端, w=幅, h=高さ（すべて0.0〜1.0）
+- 行間の余白を忠実に反映する（詰まった行はyの差が小さく、離れた行はyの差が大きい）
 
 【出力形式】
 {"title":"画像全体のタイトルや主題（なければ空文字）","items":[{"type":"heading","text":"正確な文字列","x":0.05,"y":0.02,"w":0.90,"h":0.07,"color":"black","bold":true,"shape":"none"},{"type":"bullet","text":"正確な文字列","x":0.05,"y":0.11,"w":0.85,"h":0.05,"color":"black","bold":false,"shape":"none"},{"type":"text","text":"四角囲みの文字","x":0.10,"y":0.20,"w":0.35,"h":0.10,"color":"red","bold":false,"shape":"rect"},{"type":"text","text":"丸囲みの文字","x":0.55,"y":0.20,"w":0.30,"h":0.10,"color":"blue","bold":false,"shape":"ellipse"},{"type":"arrow","text":"矢印のラベル","x":0.30,"y":0.38,"w":0.40,"h":0.05,"color":"black","bold":false,"shape":"none"}],"tables":[{"x":0.0,"y":0.7,"w":1.0,"h":0.25,"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
@@ -493,35 +505,45 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
 
     elements = data.get("elements", [])
 
-    # ── 座標を読み取り順序にのみ使用し、等間隔で順次配置 ──
-    # → フォントサイズ統一・重なりなし・1スライドに収める
+    # ── 余白比例マッピング レイアウト ──
+    # 座標で読み取り順を決定し、元画像の行間余白をスライドに比例配分する
+    # X座標も反映して横方向の位置（左/中/右）を再現する
     sorted_els = sorted(elements,
                         key=lambda e: (float(e.get("y", 0)), float(e.get("x", 0))))
     n = len(sorted_els)
 
     if n > 0:
-        # 横スライドかつ要素数が多い場合は2列に分割
-        use_two_cols = not is_portrait and n > 6
-        if use_two_cols:
-            mid       = (n + 1) // 2
-            col_left  = sorted_els[:mid]
-            col_right = sorted_els[mid:]
-            col_n     = max(len(col_left), len(col_right), 1)
-            col_w     = (CW - 0.25) / 2
-        else:
-            col_left  = sorted_els
-            col_right = []
-            col_n     = n
-            col_w     = CW
-
-        # 等間隔ステップ高 → 統一フォントサイズを算出
-        step_h  = max(0.25, min(0.55, CH / col_n))
-        base_pt = max(9, min(18, int(step_h * 72 * 0.50)))
+        # ── 統一フォントサイズの計算（要素数ベース）──
+        EL_H    = max(0.25, min(0.45, CH / n))        # 統一要素高（インチ）
+        base_pt = max(9, min(18, int(EL_H * 72 * 0.50)))
         head_pt = min(base_pt + 3, 22)
 
-        def render_col(items, x_start, w):
+        # ── 元画像の行間ギャップを算出 ──
+        src_ys = [float(el.get("y", 0.0)) for el in sorted_els]
+        src_hs = [float(el.get("h", 0.05)) for el in sorted_els]
+        src_gaps = []
+        for i in range(n):
+            if i == 0:
+                src_gaps.append(max(0.0, src_ys[0]))          # 先頭の上余白
+            else:
+                gap = src_ys[i] - (src_ys[i - 1] + src_hs[i - 1])
+                src_gaps.append(max(0.0, gap))                 # 要素間の余白
+
+        # ── ギャップをスライドの余剰空間に比例配分 ──
+        total_el_space  = n * EL_H
+        gap_budget      = max(0.0, CH - total_el_space)       # ギャップに使える総高
+        total_src_gap   = sum(src_gaps) or 1.0
+        gap_scale       = gap_budget / total_src_gap
+
+        # ── 各要素を配置 ──
+        def render_with_gaps(items, x_base, col_w):
             y = CY
-            for el in items:
+            for i, el in enumerate(items):
+                # ギャップ分を加算して y を進める
+                y += src_gaps[i] * gap_scale
+
+                x_pct      = float(el.get("x", 0.0))
+                w_pct      = float(el.get("w", 0.85))
                 etype      = el.get("type", "text")
                 content    = el.get("content", "")
                 style      = el.get("style") or {}
@@ -530,25 +552,26 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
                 underl     = style.get("underline", False)
                 shape_type = el.get("shape", "none")
 
+                # X座標: 元画像の横位置をコンテンツエリアに比例マッピング
+                sx = x_base + x_pct * col_w
+                sw = max(0.4, min(w_pct * col_w, x_base + col_w - sx))
+
                 if shape_type in ("rect", "ellipse"):
-                    shape_txt(s, shape_type, content, x_start, y, w, step_h,
+                    shape_txt(s, shape_type, content, sx, y, sw, EL_H,
                               size=base_pt, bold=bold, color=color, underline=underl)
                 elif etype == "heading":
-                    txt(s, content, x_start, y, w, step_h,
+                    txt(s, content, sx, y, sw, EL_H,
                         size=head_pt, bold=True, color=color, underline=underl)
                 elif etype == "arrow":
-                    txt(s, f"→ {content}", x_start + 0.1, y, w - 0.1, step_h,
+                    txt(s, f"→ {content}", sx + 0.05, y, sw - 0.05, EL_H,
                         size=base_pt, color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
                 else:
-                    txt(s, content, x_start + 0.05, y, w - 0.05, step_h,
+                    txt(s, content, sx + 0.05, y, sw - 0.05, EL_H,
                         size=base_pt, bold=bold, color=color, underline=underl)
-                y += step_h
 
-        if use_two_cols:
-            render_col(col_left,  CX,                  col_w)
-            render_col(col_right, CX + col_w + 0.25,   col_w)
-        else:
-            render_col(sorted_els, CX, CW)
+                y += EL_H
+
+        render_with_gaps(sorted_els, CX, CW)
 
     # ─ 表を配置（座標ベース対応）─
     for tbl_data in data.get("tables", []):
