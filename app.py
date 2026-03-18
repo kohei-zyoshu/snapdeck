@@ -246,25 +246,15 @@ def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
     return base64.standard_b64encode(buf.getvalue()).decode("utf-8"), "image/jpeg"
 
 
-SYSTEM_PROMPT = (
-    "You are a JSON extraction engine. "
-    "You must always respond with a single valid JSON object and absolutely nothing else. "
-    "Do not include any explanation, markdown formatting, code fences, or commentary. "
-    "Start your response with { and end with }."
-)
+EXTRACTION_PROMPT = """この画像（ホワイトボード・手書きメモ）に書かれたすべての文字を読み取り、次のJSON形式で返してください。
 
-EXTRACTION_PROMPT = """画像（ホワイトボード・手書きメモ）を解析し、以下のJSON形式だけを返してください。説明文・コードブロック・前置きは一切不要です。
+{"title":"メモのタイトルや全体テーマ（なければ空文字）","items":[{"type":"heading","text":"見出しテキスト"},{"type":"bullet","text":"箇条書きテキスト"},{"type":"text","text":"その他のテキスト"},{"type":"arrow","text":"矢印で示されたテキスト"}],"tables":[{"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
 
-{"title":"タイトル","elements":[{"id":"el_001","type":"heading","content":"テキスト","position":{"zone_row":0,"zone_col":0},"style":{"color":"black","bold":false,"underline":false,"circled":false,"size":"large"},"confidence":0.95}],"tables":[{"id":"tbl_001","position":{"zone_row":1,"zone_col":0},"headers":["列1","列2"],"rows":[["値1","値2"]]}],"structure":{"type":"list","groups":[{"label":"グループ名","items":["el_001"]}]},"language":"ja","notes":""}
-
-ルール:
-- すべての文字・数字・記号を漏れなく読む（かすれ・小さい文字も含む）
-- type: heading / bullet / text / arrow のいずれか
-- zone_row: 0=上 1=中 2=下、zone_col: 0=左 1=中 2=右
-- color: black/red/blue/green/orange/purple/pink/gray/brown/yellow
-- size: large/medium/small
-- 表がなければ tables は []
-- 必ず { で始まり } で終わる純粋なJSONのみ返すこと"""
+注意:
+- 文字・数字・記号をすべて漏れなく読む
+- typeはheading/bullet/text/arrowのどれか
+- 表がなければtablesは[]
+- JSONのみ返す。説明文・コードブロック不要"""
 
 
 def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
@@ -272,9 +262,8 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model="claude-opus-4-6",
+        model="claude-sonnet-4-6",
         max_tokens=4096,
-        system=SYSTEM_PROMPT,
         messages=[
             {"role": "user", "content": [
                 {"type": "image", "source": {
@@ -284,25 +273,37 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
             ]},
         ]
     )
-    text = message.content[0].text.strip()
+    raw = message.content[0].text.strip()
 
     # ① コードブロック除去
-    text = re.sub(r"```(?:json)?\s*", "", text)
+    text = re.sub(r"```(?:json)?\s*", "", raw)
     text = re.sub(r"```", "", text).strip()
 
     # ② 最初の { から最後の } を抽出
     start = text.find("{")
     end   = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"AIの応答にJSONが含まれていません。応答内容：{text[:300]}")
+        raise ValueError(f"__RAW__:{raw[:500]}")
     text = text[start:end + 1]
 
     # ③ 制御文字を除去してパース
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
     try:
-        return json.loads(text)
+        data = json.loads(text)
+        # 旧スキーマ（elements）と新スキーマ（items）の両方に対応
+        if "items" in data and "elements" not in data:
+            data["elements"] = [
+                {"id": f"el_{i:03d}", "type": it.get("type","text"),
+                 "content": it.get("text",""), "confidence": 1.0,
+                 "position": {}, "style": {}}
+                for i, it in enumerate(data["items"], 1)
+            ]
+            data.setdefault("structure", {"type":"list","groups":[
+                {"label":"内容","items":[f"el_{i:03d}" for i in range(1, len(data["elements"])+1)]}
+            ]})
+        return data
     except json.JSONDecodeError as e:
-        raise ValueError(f"JSONの解析に失敗しました: {e}\n応答の先頭: {text[:300]}")
+        raise ValueError(f"__RAW__:{raw[:500]}\n__ERR__:{e}")
 
 
 def generate_pptx(data: dict) -> bytes:
