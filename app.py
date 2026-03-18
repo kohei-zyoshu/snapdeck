@@ -163,14 +163,45 @@ st.markdown("""
 
 /* ── ファイルアップローダー ── */
 [data-testid="stFileUploaderDropzone"] {
-    min-height: 140px;
+    min-height: 150px;
     border-radius: 14px !important;
     border: 2.5px dashed #90B8C8 !important;
     background: #F0F8FB !important;
 }
-[data-testid="stFileUploaderDropzoneInstructions"] p {
-    font-size: 1.05rem !important;
-    color: #3D6070 !important;
+/* 英語の案内テキストを非表示にして日本語に置き換え */
+[data-testid="stFileUploaderDropzoneInstructions"] span {
+    display: none !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] small {
+    display: none !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"]::before {
+    content: "ここに画像をドラッグするか、下のボタンでファイルを選んでください";
+    display: block;
+    font-size: 1.05rem;
+    color: #3D6070;
+    margin-bottom: 0.6rem;
+    text-align: center;
+}
+[data-testid="stFileUploaderDropzoneInstructions"]::after {
+    content: "対応形式：JPG・PNG・WebP　最大20MBまで";
+    display: block;
+    font-size: 0.9rem;
+    color: #7A9AAD;
+    text-align: center;
+    margin-top: 0.3rem;
+}
+/* 「Browse files」ボタンを「ファイルを選ぶ」に */
+[data-testid="stFileUploaderDropzone"] button {
+    font-size: 0 !important;
+    min-height: 52px !important;
+    border-radius: 10px !important;
+    padding: 0 1.5rem !important;
+}
+[data-testid="stFileUploaderDropzone"] button::after {
+    content: "📁　ファイルを選ぶ";
+    font-size: 1.05rem;
+    font-weight: 700;
 }
 
 /* ── トグル ── */
@@ -194,15 +225,17 @@ hr { margin: 1.6rem 0 !important; border-color: #C8D8E4 !important; border-width
 # ─── バックエンド関数 ──────────────────────────────────────────────────────────
 
 def get_api_key() -> str:
-    """APIキーを Secrets または入力欄から取得"""
+    """APIキーを Secrets または入力欄から取得（前後の空白・改行を除去）"""
     try:
-        return st.secrets["ANTHROPIC_API_KEY"]
+        key = st.secrets["ANTHROPIC_API_KEY"]
+        if key:
+            return str(key).strip()
     except Exception:
         pass
-    env_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    env_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if env_key:
         return env_key
-    return st.session_state.get("api_key_input", "")
+    return st.session_state.get("api_key_input", "").strip()
 
 
 def auto_trim(img: Image.Image, margin: int = 30) -> Image.Image:
@@ -271,7 +304,7 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model="claude-opus-4-6",
+        model="claude-sonnet-4-6",
         max_tokens=4096,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {
@@ -442,39 +475,17 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True)
 
-tab_cam, tab_file = st.tabs(["📷　カメラで撮る", "📁　ファイルから選ぶ"])
+st.markdown(
+    "<div class='guide-box'>📱 スマートフォンで撮影した写真や、カメラロールにある画像を選べます。</div>",
+    unsafe_allow_html=True)
+uploaded_file = st.file_uploader(
+    "画像ファイルを選ぶ",
+    type=["jpg", "jpeg", "png", "webp"],
+    label_visibility="collapsed",
+    help="JPG・PNG・WebP 形式の画像に対応しています。",
+)
 
-with tab_cam:
-    st.markdown(
-        "<div class='guide-box'>📌 はじめてご利用の際は「カメラの使用を許可しますか？」と聞かれます。<strong>「許可」</strong>を選んでください。</div>",
-        unsafe_allow_html=True)
-    try:
-        camera_photo = st.camera_input(
-            "カメラを起動する",
-            facing_mode="environment",
-            help="スマートフォンのカメラが起動します。",
-            label_visibility="collapsed",
-        )
-    except TypeError:
-        camera_photo = st.camera_input(
-            "カメラを起動する",
-            help="スマートフォンのカメラが起動します。",
-            label_visibility="collapsed",
-        )
-
-with tab_file:
-    st.markdown(
-        "<div class='guide-box'>📁 スマートフォンの「写真」アプリやカメラロールから画像を選べます。</div>",
-        unsafe_allow_html=True)
-    uploaded_file = st.file_uploader(
-        "画像ファイルを選ぶ",
-        type=["jpg", "jpeg", "png", "webp"],
-        label_visibility="collapsed",
-        help="JPG・PNG・WebP 形式の画像に対応しています。",
-    )
-
-# カメラ優先で統合
-raw_input = camera_photo or uploaded_file
+raw_input = uploaded_file
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 画像プレビュー ＆ 余白カット
@@ -550,11 +561,10 @@ if convert_btn and img_data:
     with st.spinner("AIが文字を読み取っています… しばらくお待ちください（約10〜20秒）"):
         try:
             api_key = get_api_key()
-            if api_key:
-                extracted = analyze_with_claude(img_data, media_type, api_key)
-            else:
+            if not api_key:
                 st.warning("認証キーが設定されていません。左上のメニューから設定してください。")
-                extracted = get_demo_data()
+                st.stop()
+            extracted = analyze_with_claude(img_data, media_type, api_key)
             st.session_state["extracted"]  = extracted
             st.session_state["pptx_bytes"] = generate_pptx(extracted)
         except Exception as e:
