@@ -268,7 +268,7 @@ EXTRACTION_PROMPT = """画像（ホワイトボード・手書きメモ）を解
 
 
 def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
-    """AIで画像を解析（prefill方式でJSON確実取得）"""
+    """AIで画像を解析（堅牢なJSON抽出）"""
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
@@ -282,20 +282,22 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
                 }},
                 {"type": "text", "text": EXTRACTION_PROMPT},
             ]},
-            # prefill: { を先置きすることでClaudeが必ずJSONを返す
-            {"role": "assistant", "content": "{"},
         ]
     )
-    # prefillの { を補って完全なJSONに
-    text = "{" + message.content[0].text.strip()
+    text = message.content[0].text.strip()
 
-    # 最後の } 以降を切り捨て
-    end = text.rfind("}")
-    if end == -1:
+    # ① コードブロック除去
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    text = re.sub(r"```", "", text).strip()
+
+    # ② 最初の { から最後の } を抽出
+    start = text.find("{")
+    end   = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
         raise ValueError(f"AIの応答にJSONが含まれていません。応答内容：{text[:300]}")
-    text = text[:end + 1]
+    text = text[start:end + 1]
 
-    # 制御文字を除去してパース
+    # ③ 制御文字を除去してパース
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
     try:
         return json.loads(text)
