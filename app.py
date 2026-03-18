@@ -270,6 +270,27 @@ def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
     return base64.standard_b64encode(buf.getvalue()).decode("utf-8"), "image/jpeg"
 
 
+@st.cache_data(show_spinner=False)
+def cached_process_image(file_bytes: bytes,
+                         do_trim: bool,
+                         do_shadow: bool) -> tuple[str, str, bool, bytes]:
+    """
+    画像のバイト列を受け取り、前処理 → base64変換 → プレビュー用バイト列を返す。
+    同じ入力なら Streamlit がキャッシュするため、リランのたびに再処理されない。
+    戻り値: (img_data_b64, media_type, is_portrait, preview_jpeg_bytes)
+    """
+    pil = Image.open(io.BytesIO(file_bytes))
+    if pil.mode != "RGB":
+        pil = pil.convert("RGB")
+    disp = preprocess_image(pil, do_trim=do_trim, do_shadow=do_shadow)
+    is_portrait = disp.height > disp.width
+    img_data, media_type = pil_to_base64(disp)
+    # プレビュー用にJPEGバイト列として保持（PIL Imageはキャッシュ不可）
+    preview_buf = io.BytesIO()
+    disp.save(preview_buf, format="JPEG", quality=88)
+    return img_data, media_type, is_portrait, preview_buf.getvalue()
+
+
 EXTRACTION_PROMPT = """あなたは優秀なOCRエンジンです。
 この画像（ホワイトボード・手書きメモ・付箋など）の内容を読み取り、プレゼンテーション用に整理してください。
 
@@ -805,15 +826,12 @@ uploaded_file = st.file_uploader(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 画像プレビュー ＆ 前処理
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-img_data    = None
-media_type  = "image/jpeg"
-is_portrait = False
+# session_state から前回の処理済みデータを取得（ファイル未選択時のフォールバック）
+img_data    = st.session_state.get("_img_data")
+media_type  = st.session_state.get("_media_type", "image/jpeg")
+is_portrait = st.session_state.get("_is_portrait", False)
 
 if uploaded_file:
-    pil_image = Image.open(uploaded_file)
-    if pil_image.mode != "RGB":
-        pil_image = pil_image.convert("RGB")
-
     st.markdown("---")
 
     do_trim = st.toggle(
@@ -827,15 +845,34 @@ if uploaded_file:
         help="照明が偏っている写真や影が入っている場合に効果的です。",
     )
 
-    display_img = preprocess_image(pil_image, do_trim=do_trim, do_shadow=do_shadow)
-    # 画像の縦横を判定してスライド向きを決定
-    is_portrait = display_img.height > display_img.width
-    orient_label = "縦（ポートレート）" if is_portrait else "横（ランドスケープ）"
-    st.caption(f"スライド向き：{orient_label} で出力します")
+    try:
+        file_bytes = uploaded_file.getvalue()   # ファイル全体をバイト列で取得
+        file_id    = f"{uploaded_file.name}_{len(file_bytes)}"
 
-    st.image(display_img, caption="変換する写真", use_container_width=True)
-    img_data, media_type = pil_to_base64(display_img)
-    st.session_state["is_portrait"] = is_portrait
+        # キャッシュ済み処理（同一ファイル＋設定ならリランしても即返却）
+        img_data, media_type, is_portrait, preview_bytes = cached_process_image(
+            file_bytes, do_trim, do_shadow
+        )
+
+        # ファイルが変わったら前の変換結果をリセット
+        if st.session_state.get("_file_id") != file_id:
+            for k in ("extracted", "pptx_bytes", "html_bytes"):
+                st.session_state.pop(k, None)
+            st.session_state["_file_id"] = file_id
+
+        # session_state に保持（リラン後もボタン押下で参照できるよう）
+        st.session_state["_img_data"]    = img_data
+        st.session_state["_media_type"]  = media_type
+        st.session_state["_is_portrait"] = is_portrait
+
+        orient_label = "縦（ポートレート）" if is_portrait else "横（ランドスケープ）"
+        st.caption(f"スライド向き：{orient_label} で出力します")
+        st.image(Image.open(io.BytesIO(preview_bytes)),
+                 caption="変換する写真", use_container_width=True)
+
+    except Exception as img_err:
+        st.error(f"画像の読み込みに失敗しました。別の画像をお試しください。\n（{img_err}）")
+        img_data = None
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ステップ２　変換する
@@ -884,7 +921,7 @@ if convert_btn and img_data:
         status.markdown("**④ スライドを作成しています…**")
         progress.progress(88)
 
-        is_portrait = st.session_state.get("is_portrait", False)
+        is_portrait = st.session_state.get("_is_portrait", False)
         st.session_state["extracted"]   = extracted
         st.session_state["pptx_bytes"]  = generate_pptx(extracted, is_portrait=is_portrait)
         st.session_state["html_bytes"]  = generate_html(extracted)
