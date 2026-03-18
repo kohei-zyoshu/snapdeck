@@ -271,35 +271,27 @@ def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
 
 
 EXTRACTION_PROMPT = """あなたは優秀なOCRエンジンです。
-この画像（ホワイトボード・手書きメモ・付箋など）を以下の手順で解析し、JSON形式のみで返してください。
+この画像（ホワイトボード・手書きメモ・付箋など）の内容を読み取り、プレゼンテーション用に整理してください。
 
 【解析手順】
-STEP1 — X軸（横方向）の構造把握:
-  画像を横断し、コンテンツが何列あるか確認する（1列 / 2列 / 複数列）。
-  列の境界（列間の余白）がどこにあるか、x座標で把握する。
+STEP1: 画像全体を俯瞰して「1列構成か2列構成か」を判断する。
+STEP2: 上から下・左から右の順にすべての文字を正確に読み取る。
+STEP3: 意味的なまとまり（セクション）ごとにグループ化する。
+  ・明確な区切り・見出しがあればセクションを分ける
+  ・2列構成なら左側を column:1、右側を column:2 とする
 
-STEP2 — Y軸（縦方向）のスキャン:
-  画像を上から下へスキャンし、テキスト行と「行間の余白（空白）」を識別する。
-  行間の余白が大きければ y 座標の差も大きく、詰まっていれば差は小さくなるよう座標を設定する。
-
-STEP3 — 各要素の精密読み取り:
-  各テキスト要素について、文字を正確に読み、左端(x)・上端(y)・幅(w)・高さ(h)を0.0〜1.0で記録する。
-
-【座標ルール】
-- 画像の左上=(0,0)、右下=(1,1)
-- x=左端, y=上端, w=幅, h=高さ（すべて0.0〜1.0）
-- 行間の余白を忠実に反映する（詰まった行はyの差が小さく、離れた行はyの差が大きい）
-
-【出力形式】
-{"title":"画像全体のタイトルや主題（なければ空文字）","items":[{"type":"heading","text":"正確な文字列","x":0.05,"y":0.02,"w":0.90,"h":0.07,"color":"black","bold":true,"shape":"none"},{"type":"bullet","text":"正確な文字列","x":0.05,"y":0.11,"w":0.85,"h":0.05,"color":"black","bold":false,"shape":"none"},{"type":"text","text":"四角囲みの文字","x":0.10,"y":0.20,"w":0.35,"h":0.10,"color":"red","bold":false,"shape":"rect"},{"type":"text","text":"丸囲みの文字","x":0.55,"y":0.20,"w":0.30,"h":0.10,"color":"blue","bold":false,"shape":"ellipse"},{"type":"arrow","text":"矢印のラベル","x":0.30,"y":0.38,"w":0.40,"h":0.05,"color":"black","bold":false,"shape":"none"}],"tables":[{"x":0.0,"y":0.7,"w":1.0,"h":0.25,"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
+【返却JSON形式】
+{"title":"最も目立つタイトル・主題（スライドのタイトルとなる1行）","sections":[{"heading":"セクション見出し（なければ空文字）","column":1,"items":[{"text":"正確な文字列","type":"heading","shape":"none","color":"black","bold":true},{"text":"箇条書き","type":"bullet","shape":"none","color":"black","bold":false},{"text":"四角囲み","type":"text","shape":"rect","color":"red","bold":false},{"text":"丸囲み","type":"text","shape":"ellipse","color":"blue","bold":false},{"text":"矢印ラベル","type":"arrow","shape":"none","color":"black","bold":false}]}],"tables":[{"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
 
 【必須ルール】
-- 画像内のすべての文字を漏れなく・正確に読む（略さない・推測で補わない）
-- type: heading（見出し・大きな文字）/ bullet（箇条書き・リスト）/ text（一般テキスト）/ arrow（矢印のラベル）
-- shape: 四角で囲まれていれば "rect"、丸・楕円で囲まれていれば "ellipse"、囲みなしは "none"
-- color: black/red/blue/green/orange/purple/pink/gray/brown/yellow のいずれか
-- 表がなければ tables は []
-- JSONのみ返す（説明文・コードブロック・前置き一切不要）"""
+- title はスライドヘッダー専用（sections の items には含めない）
+- column: 左側・1列レイアウトは 1、右側コンテンツは 2
+- type: heading（大きな文字・見出し）/ bullet（箇条書き）/ text（通常）/ arrow（矢印ラベル）
+- shape: 四角囲み="rect"、丸・楕円囲み="ellipse"、囲みなし="none"
+- color: black/red/blue/green/orange/purple/pink/gray/brown/yellow
+- 画像内のすべての文字を漏れなく・正確に読む（推測・省略禁止）
+- 表がなければ tables:[]
+- JSONのみ返す（説明文・コードブロック不要）"""
 
 
 def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
@@ -335,35 +327,42 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
     try:
         data = json.loads(text)
-        # items → elements に変換（座標情報も引き継ぐ）
-        if "items" in data and "elements" not in data:
-            data["elements"] = [
-                {
-                    "id": f"el_{i:03d}",
-                    "type":    it.get("type", "text"),
-                    "content": it.get("text", ""),
-                    "confidence": 1.0,
-                    # 正規化座標（0.0〜1.0）
-                    "x": float(it.get("x", 0.0)),
-                    "y": float(it.get("y", 0.0)),
-                    "w": float(it.get("w", 0.9)),
-                    "h": float(it.get("h", 0.06)),
-                    "shape": it.get("shape", "none"),
-                    "style": {
-                        "color":   it.get("color", "black"),
-                        "bold":    it.get("bold", False),
-                        "size":    it.get("size", "medium"),
-                    },
-                    "position": {},
-                }
-                for i, it in enumerate(data["items"], 1)
-            ]
-            data.setdefault("structure", {"type": "list", "groups": [
-                {"label": "内容", "items": [f"el_{i:03d}" for i in range(1, len(data["elements"]) + 1)]}
-            ]})
-        return data
     except json.JSONDecodeError as e:
         raise ValueError(f"JSON解析エラー: {e}\n応答の先頭: {text[:200]}")
+
+    # ── sections 形式への正規化 ──
+    # 旧 items 形式が返ってきた場合は sections に変換
+    if "sections" not in data and "items" in data:
+        data["sections"] = [{
+            "heading": "",
+            "column": 1,
+            "items": [
+                {"text": it.get("text", ""), "type": it.get("type", "text"),
+                 "shape": it.get("shape", "none"), "color": it.get("color", "black"),
+                 "bold": it.get("bold", False)}
+                for it in data["items"]
+            ],
+        }]
+
+    # ── UI 表示用の elements リストを sections から構築 ──
+    elements = []
+    for sec in data.get("sections", []):
+        for it in sec.get("items", []):
+            idx = len(elements)
+            elements.append({
+                "id":      f"el_{idx:03d}",
+                "type":    it.get("type", "text"),
+                "content": it.get("text", ""),
+                "shape":   it.get("shape", "none"),
+                "style":   {"color": it.get("color", "black"),
+                             "bold":  it.get("bold", False)},
+                "confidence": 1.0,
+            })
+    data["elements"] = elements
+    data.setdefault("structure", {"type": "list", "groups": [
+        {"label": "内容", "items": [e["id"] for e in elements]}
+    ]})
+    return data
 
 
 def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
@@ -528,90 +527,89 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
     CW = SLIDE_W - 0.70    # コンテンツ幅
     CH = SLIDE_H - 1.55    # コンテンツ高さ（フッター分を引く）
 
-    elements = data.get("elements", [])
+    sections = data.get("sections", [])
+    tables   = data.get("tables", [])
 
-    # ── 余白比例マッピング レイアウト ──
-    # 座標で読み取り順を決定し、元画像の行間余白をスライドに比例配分する
-    # X座標も反映して横方向の位置（左/中/右）を再現する
-    sorted_els = sorted(elements,
-                        key=lambda e: (float(e.get("y", 0)), float(e.get("x", 0))))
-    n = len(sorted_els)
+    # ── 座標を一切使わない sections ベースのクリーンレイアウト ──
+    # AIには「何がどんな構造か」だけ聞き、配置はすべてコードが決める。
 
-    if n > 0:
-        # ── 統一フォントサイズの計算（要素数ベース）──
-        EL_H    = max(0.25, min(0.45, CH / n))        # 統一要素高（インチ）
-        base_pt = max(9, min(18, int(EL_H * 72 * 0.50)))
-        head_pt = min(base_pt + 3, 22)
+    col1_secs = [s for s in sections if s.get("column", 1) != 2]
+    col2_secs = [s for s in sections if s.get("column", 1) == 2]
+    has_two_cols = bool(col2_secs) and not is_portrait
 
-        # ── 元画像の行間ギャップを算出 ──
-        src_ys = [float(el.get("y", 0.0)) for el in sorted_els]
-        src_hs = [float(el.get("h", 0.05)) for el in sorted_els]
-        src_gaps = []
-        for i in range(n):
-            if i == 0:
-                src_gaps.append(max(0.0, src_ys[0]))          # 先頭の上余白
-            else:
-                gap = src_ys[i] - (src_ys[i - 1] + src_hs[i - 1])
-                src_gaps.append(max(0.0, gap))                 # 要素間の余白
+    def count_rows(secs):
+        """セクション群の総行数（見出し行 + アイテム行）"""
+        n = 0
+        for sec in secs:
+            if sec.get("heading"):
+                n += 1
+            n += len(sec.get("items", []))
+        return max(n, 1)
 
-        # ── ギャップをスライドの余剰空間に比例配分 ──
-        total_el_space  = n * EL_H
-        gap_budget      = max(0.0, CH - total_el_space)       # ギャップに使える総高
-        total_src_gap   = sum(src_gaps) or 1.0
-        gap_scale       = gap_budget / total_src_gap
+    if has_two_cols:
+        col_w  = (CW - 0.30) / 2
+        n_rows = max(count_rows(col1_secs), count_rows(col2_secs))
+    else:
+        col_w  = CW
+        n_rows = count_rows(col1_secs + col2_secs)
 
-        # ── 各要素を配置 ──
-        def render_with_gaps(items, x_base, col_w):
-            y = CY
-            for i, el in enumerate(items):
-                # ギャップ分を加算して y を進める
-                y += src_gaps[i] * gap_scale
+    # ── 統一フォントサイズ（行数から逆算）──
+    EL_H    = max(0.24, min(0.44, CH / n_rows))
+    base_pt = max(9, min(16, int(EL_H * 72 * 0.50)))
+    head_pt = min(base_pt + 3, 20)       # 見出し（heading type）
+    sec_pt  = min(base_pt + 5, 22)       # セクション見出し
 
-                x_pct      = float(el.get("x", 0.0))
-                w_pct      = float(el.get("w", 0.85))
-                etype      = el.get("type", "text")
-                content    = el.get("content", "")
-                style      = el.get("style") or {}
-                color      = resolve_color(style.get("color", el.get("color", "black")))
-                bold       = style.get("bold", el.get("bold", False)) or (etype == "heading")
-                underl     = style.get("underline", False)
-                shape_type = el.get("shape", "none")
+    def render_sections(secs, x_start, width):
+        y = CY
+        for sec in secs:
+            heading = sec.get("heading", "").strip()
+            items   = sec.get("items", [])
 
-                # X座標: 元画像の横位置をコンテンツエリアに比例マッピング
-                sx = x_base + x_pct * col_w
-                sw = max(0.4, min(w_pct * col_w, x_base + col_w - sx))
-
-                if shape_type in ("rect", "ellipse"):
-                    shape_txt(s, shape_type, content, sx, y, sw, EL_H,
-                              size=base_pt, bold=bold, color=color, underline=underl)
-                elif etype == "heading":
-                    txt(s, content, sx, y, sw, EL_H,
-                        size=head_pt, bold=True, color=color, underline=underl)
-                elif etype == "arrow":
-                    txt(s, f"→ {content}", sx + 0.05, y, sw - 0.05, EL_H,
-                        size=base_pt, color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
-                else:
-                    txt(s, content, sx + 0.05, y, sw - 0.05, EL_H,
-                        size=base_pt, bold=bold, color=color, underline=underl)
-
+            # セクション見出し（アンダーライン付き）
+            if heading:
+                txt(s, heading, x_start, y, width, EL_H,
+                    size=sec_pt, bold=True, color=C_WHITE, underline=True)
                 y += EL_H
 
-        render_with_gaps(sorted_els, CX, CW)
+            for item in items:
+                etype      = item.get("type", "text")
+                content    = item.get("text", "")
+                shape_type = item.get("shape", "none")
+                color      = resolve_color(item.get("color", "black"))
+                bold       = item.get("bold", False) or etype == "heading"
 
-    # ─ 表を配置（座標ベース対応）─
-    for tbl_data in data.get("tables", []):
-        if "x" in tbl_data:
-            tbl_x = CX + float(tbl_data.get("x", 0.0)) * CW
-            tbl_y = CY + float(tbl_data.get("y", 0.8)) * CH
-            tbl_w = max(1.0, float(tbl_data.get("w", 1.0)) * CW)
-            tbl_h = max(0.5, float(tbl_data.get("h", 0.2)) * CH)
-        else:
-            pos   = tbl_data.get("position") or {}
-            tbl_y = CY + pos.get("zone_row", 2) * 1.8
-            tbl_x = CX + pos.get("zone_col", 0) * (4.3 if not is_portrait else 0)
-            tbl_w = SLIDE_W - 0.9
-            tbl_h = 1.8
-        add_table_shape(s, tbl_data, tbl_x, tbl_y, max_w=tbl_w, max_h=tbl_h)
+                if shape_type in ("rect", "ellipse"):
+                    shape_txt(s, shape_type, content,
+                              x_start + 0.05, y, width - 0.1, EL_H,
+                              size=base_pt, bold=bold, color=color)
+                elif etype == "heading":
+                    txt(s, content, x_start, y, width, EL_H,
+                        size=head_pt, bold=True, color=color)
+                elif etype == "arrow":
+                    txt(s, f"→ {content}", x_start + 0.1, y, width - 0.1, EL_H,
+                        size=base_pt, color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
+                elif etype == "bullet":
+                    txt(s, f"・{content}", x_start + 0.1, y, width - 0.1, EL_H,
+                        size=base_pt, bold=bold, color=color)
+                else:
+                    txt(s, content, x_start + 0.1, y, width - 0.1, EL_H,
+                        size=base_pt, bold=bold, color=color)
+                y += EL_H
+
+    if has_two_cols:
+        render_sections(col1_secs, CX,              col_w)
+        render_sections(col2_secs, CX + col_w + 0.30, col_w)
+    else:
+        render_sections(col1_secs + col2_secs, CX, col_w)
+
+    # ─ 表を配置（コンテンツエリア末尾）─
+    tbl_y = CY + n_rows * EL_H + 0.1
+    for tbl_data in tables:
+        if tbl_y >= CY + CH:
+            break
+        tbl_h = min(1.8, CY + CH - tbl_y)
+        add_table_shape(s, tbl_data, CX, tbl_y, max_w=CW, max_h=tbl_h)
+        tbl_y += tbl_h + 0.1
 
     # ─ フッター ─
     FOOTER_Y = SLIDE_H - 0.35
@@ -625,80 +623,84 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
 
 
 def generate_html(data: dict) -> bytes:
-    """iPhone Safari でそのまま開けるHTMLを生成"""
-    title = data.get("title", "メモ")
-    elements = sorted(data.get("elements", []),
-                      key=lambda e: (float(e.get("y", 0)), float(e.get("x", 0))))
+    """iPhone Safari でそのまま開けるHTMLを sections ベースで生成"""
+    title    = data.get("title", "メモ")
+    sections = data.get("sections", [])
+    tables   = data.get("tables", [])
     CMAP = {
         "black": "#1E1B4B", "white": "#6B7280", "red": "#DC2626",
-        "blue": "#2563EB", "green": "#16A34A", "yellow": "#CA8A04",
+        "blue": "#2563EB", "green": "#16A34A", "yellow": "#B45309",
         "orange": "#EA580C", "purple": "#7C3AED", "pink": "#DB2777",
         "gray": "#6B7280", "brown": "#92400E",
     }
-    rows = ""
-    list_open = False
-    for el in elements:
-        etype   = el.get("type", "text")
-        content = el.get("content", "")
-        shape   = el.get("shape", "none")
-        style   = el.get("style") or {}
-        color   = CMAP.get(style.get("color", el.get("color", "black")), "#1E1B4B")
-        bold    = style.get("bold", False) or etype == "heading"
+
+    def render_item(item):
+        etype   = item.get("type", "text")
+        content = item.get("text", "")
+        shape   = item.get("shape", "none")
+        color   = CMAP.get(item.get("color", "black"), "#1E1B4B")
+        bold    = item.get("bold", False) or etype == "heading"
         fw      = "700" if bold else "400"
-
-        if etype == "bullet":
-            if not list_open:
-                rows += "<ul>"
-                list_open = True
-            rows += f"<li style='color:{color}; font-weight:{fw};'>{content}</li>"
-            continue
-        if list_open:
-            rows += "</ul>"
-            list_open = False
-
+        if shape == "rect":
+            return (f"<span class='badge rect' style='color:{color};"
+                    f" border-color:{color}; font-weight:{fw};'>{content}</span>")
+        if shape == "ellipse":
+            return (f"<span class='badge ellipse' style='color:{color};"
+                    f" border-color:{color}; font-weight:{fw};'>{content}</span>")
         if etype == "heading":
-            rows += (f"<h2 style='color:{color}; margin:1.4rem 0 0.4rem;"
-                     f" font-size:1.2rem;'>{content}</h2>")
-        elif etype == "arrow":
-            rows += (f"<p style='color:#7C3AED; margin:0.5rem 0;"
-                     f" font-weight:{fw};'>&rarr;&nbsp;{content}</p>")
-        elif shape == "rect":
-            rows += (f"<p style='color:{color}; border:2px solid {color};"
-                     f" border-radius:6px; padding:0.25rem 0.75rem;"
-                     f" display:inline-block; margin:0.4rem 0; font-weight:{fw};'>"
-                     f"{content}</p><br>")
-        elif shape == "ellipse":
-            rows += (f"<p style='color:{color}; border:2px solid {color};"
-                     f" border-radius:50px; padding:0.25rem 1rem;"
-                     f" display:inline-block; margin:0.4rem 0; font-weight:{fw};'>"
-                     f"{content}</p><br>")
-        else:
-            rows += f"<p style='color:{color}; margin:0.35rem 0; font-weight:{fw};'>{content}</p>"
+            return f"<h3 style='color:{color};'>{content}</h3>"
+        if etype == "arrow":
+            return f"<p class='arrow'>&rarr; {content}</p>"
+        if etype == "bullet":
+            return f"<li style='color:{color}; font-weight:{fw};'>{content}</li>"
+        return f"<p style='color:{color}; font-weight:{fw};'>{content}</p>"
 
-    if list_open:
-        rows += "</ul>"
+    def render_section(sec):
+        heading = sec.get("heading", "").strip()
+        items   = sec.get("items", [])
+        out = ""
+        if heading:
+            out += f"<h2 class='sec-heading'>{heading}</h2>"
+        bullets = [it for it in items if it.get("type") == "bullet"]
+        others  = [it for it in items if it.get("type") != "bullet"]
+        # 箇条書きをまとめて <ul> に
+        i = 0
+        for item in items:
+            if item.get("type") == "bullet":
+                if i == 0 or items[i-1].get("type") != "bullet":
+                    out += "<ul>"
+                out += render_item(item)
+                if i == len(items)-1 or items[i+1].get("type") != "bullet":
+                    out += "</ul>"
+            else:
+                out += render_item(item)
+            i += 1
+        return out
+
+    body = ""
+    col1 = [s for s in sections if s.get("column", 1) != 2]
+    col2 = [s for s in sections if s.get("column", 1) == 2]
+    if col2:
+        body += "<div class='two-col'>"
+        body += "<div class='col'>" + "".join(render_section(s) for s in col1) + "</div>"
+        body += "<div class='col'>" + "".join(render_section(s) for s in col2) + "</div>"
+        body += "</div>"
+    else:
+        body = "".join(render_section(s) for s in col1)
 
     # テーブル
-    for tbl in data.get("tables", []):
+    for tbl in tables:
         headers = tbl.get("headers", [])
         trows   = tbl.get("rows", [])
         if not headers and not trows:
             continue
-        rows += "<table style='border-collapse:collapse; width:100%; margin:1rem 0;'>"
+        body += "<table>"
         if headers:
-            rows += "<tr>"
-            for h in headers:
-                rows += (f"<th style='background:#7C3AED; color:#fff; padding:0.4rem 0.6rem;"
-                         f" font-size:0.9rem; text-align:left; border:1px solid #C4B5FD;'>{h}</th>")
-            rows += "</tr>"
+            body += "<tr>" + "".join(f"<th>{h}</th>" for h in headers) + "</tr>"
         for i, row in enumerate(trows):
-            bg = "#F5F3FF" if i % 2 == 0 else "#FFFFFF"
-            rows += f"<tr style='background:{bg};'>"
-            for cell in row:
-                rows += (f"<td style='padding:0.35rem 0.6rem; font-size:0.9rem;"
-                         f" border:1px solid #EDE9FE; color:#1E1B4B;'>{cell}</td>")
-            rows += "</tr>"
-        rows += "</table>"
+            cls = "even" if i % 2 == 0 else ""
+            body += f"<tr class='{cls}'>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>"
+        body += "</table>"
 
     ts = datetime.now().strftime("%Y年%m月%d日 %H:%M")
     html = f"""<!DOCTYPE html>
@@ -708,32 +710,48 @@ def generate_html(data: dict) -> bytes:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title} — パシャッと</title>
 <style>
+  * {{ box-sizing: border-box; }}
   body {{ font-family: -apple-system, 'Hiragino Sans', 'Yu Gothic', sans-serif;
-          background: #F5F3FF; margin: 0; padding: 1rem; color: #1E1B4B; }}
+          background: #F5F3FF; margin: 0; padding: 1rem; color: #1E1B4B;
+          font-size: 16px; line-height: 1.7; }}
   .card {{ background: #fff; border-radius: 16px; padding: 1.5rem 1.6rem;
-           box-shadow: 0 2px 16px rgba(109,40,217,0.12); max-width: 700px;
+           box-shadow: 0 2px 16px rgba(109,40,217,0.12); max-width: 720px;
            margin: 0 auto; }}
   .header {{ background: linear-gradient(135deg,#6D28D9,#A855F7,#EC4899);
              border-radius: 12px; padding: 1rem 1.4rem; margin-bottom: 1.2rem; }}
-  .header h1 {{ color: #fff; margin: 0; font-size: 1.3rem; }}
-  .header p  {{ color: rgba(255,255,255,0.75); margin: 0.3rem 0 0;
-                font-size: 0.8rem; }}
-  hr  {{ border: none; border-top: 1px solid #EDE9FE; margin: 1rem 0; }}
-  ul  {{ padding-left: 1.4rem; }}
-  li  {{ margin: 0.3rem 0; line-height: 1.7; }}
-  p   {{ line-height: 1.7; }}
-  footer {{ text-align: center; color: #A78BFA; font-size: 0.75rem;
-            margin-top: 1.5rem; }}
+  .header h1 {{ color:#fff; margin:0; font-size:1.3rem; }}
+  .header p  {{ color:rgba(255,255,255,0.75); margin:0.25rem 0 0; font-size:0.8rem; }}
+  hr {{ border:none; border-top:1px solid #EDE9FE; margin:1rem 0; }}
+  h2.sec-heading {{ font-size:1.05rem; font-weight:800; color:#4C1D95;
+                    border-left:4px solid #7C3AED; padding-left:0.6rem;
+                    margin:1.2rem 0 0.5rem; }}
+  h3 {{ font-size:1rem; margin:0.8rem 0 0.3rem; }}
+  ul {{ padding-left:1.4rem; margin:0.3rem 0; }}
+  li {{ margin:0.2rem 0; }}
+  p  {{ margin:0.3rem 0; }}
+  .arrow {{ color:#7C3AED; font-weight:600; }}
+  .badge {{ display:inline-block; border:2px solid; border-radius:6px;
+            padding:0.15rem 0.6rem; margin:0.25rem 0; font-weight:600; }}
+  .badge.ellipse {{ border-radius:50px; padding:0.15rem 0.9rem; }}
+  .two-col {{ display:flex; gap:1.2rem; }}
+  .col {{ flex:1; min-width:0; }}
+  table {{ border-collapse:collapse; width:100%; margin:1rem 0; font-size:0.9rem; }}
+  th {{ background:#7C3AED; color:#fff; padding:0.4rem 0.6rem;
+        text-align:left; border:1px solid #C4B5FD; }}
+  td {{ padding:0.35rem 0.6rem; border:1px solid #EDE9FE; }}
+  tr.even td {{ background:#F5F3FF; }}
+  footer {{ text-align:center; color:#A78BFA; font-size:0.75rem; margin-top:1.5rem; }}
+  @media (max-width:520px) {{ .two-col {{ flex-direction:column; }} }}
 </style>
 </head>
 <body>
 <div class="card">
   <div class="header">
     <h1>{title}</h1>
-    <p>{ts} 変換 &#124; パシャッと</p>
+    <p>{ts} 変換 | パシャッと</p>
   </div>
   <hr>
-  {rows}
+  {body}
 </div>
 <footer>パシャッと — AI文字認識による自動変換</footer>
 </body>
