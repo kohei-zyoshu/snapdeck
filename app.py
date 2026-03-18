@@ -797,7 +797,7 @@ if convert_btn and img_data:
         status_text.markdown("**① 写真を準備しています…**")
         progress_bar.progress(15)
 
-        status_text.markdown("**② AIに写真を送っています…**")
+        status_text.markdown("**② 写真を読み取っています…**")
         progress_bar.progress(35)
 
         extracted = analyze_with_claude(img_data, media_type, api_key)
