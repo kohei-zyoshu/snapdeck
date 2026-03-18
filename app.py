@@ -350,13 +350,11 @@ def enhance_for_ocr(img: Image.Image) -> Image.Image:
     return img
 
 
-def preprocess_image(img: Image.Image, do_trim: bool = True, do_deskew: bool = True) -> Image.Image:
-    """全前処理をまとめて実行: EXIF回転 → トリミング → デスキュー → 画質強化"""
+def preprocess_image(img: Image.Image, do_trim: bool = True) -> Image.Image:
+    """全前処理をまとめて実行: EXIF回転 → トリミング"""
     img = fix_orientation(img)
     if do_trim:
         img = auto_trim(img)
-    if do_deskew:
-        img = deskew_image(img)
     return img
 
 
@@ -735,7 +733,7 @@ if raw_input:
         help="余白を除去して読み取り精度を上げます。",
     )
 
-    display_img = preprocess_image(pil_image, do_trim=do_trim, do_deskew=True)
+    display_img = preprocess_image(pil_image, do_trim=do_trim)
     st.image(display_img, caption="変換する写真", use_container_width=True)
 
     img_data, media_type = pil_to_base64(display_img)
