@@ -717,13 +717,8 @@ if raw_input:
         value=True,
         help="余白を除去して読み取り精度を上げます。",
     )
-    do_deskew = st.toggle(
-        "📐　傾き補正（写真が斜めのとき）",
-        value=True,
-        help="写真の傾きを自動で検出して補正します。正面から撮った写真には不要な場合があります。",
-    )
 
-    display_img = preprocess_image(pil_image, do_trim=do_trim, do_deskew=do_deskew)
+    display_img = preprocess_image(pil_image, do_trim=do_trim, do_deskew=True)
     st.image(display_img, caption="変換する写真", use_container_width=True)
 
     img_data, media_type = pil_to_base64(display_img)
