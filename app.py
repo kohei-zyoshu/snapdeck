@@ -247,13 +247,15 @@ def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
 
 
 EXTRACTION_PROMPT = """この画像（ホワイトボード・手書きメモ）に書かれたすべての文字を読み取り、次のJSON形式で返してください。
+座標は画像全体を幅1.0・高さ1.0として正規化（x=左端, y=上端, w=幅, h=高さ）。
 
-{"title":"メモのタイトルや全体テーマ（なければ空文字）","items":[{"type":"heading","text":"見出しテキスト"},{"type":"bullet","text":"箇条書きテキスト"},{"type":"text","text":"その他のテキスト"},{"type":"arrow","text":"矢印で示されたテキスト"}],"tables":[{"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
+{"title":"タイトル","items":[{"type":"heading","text":"見出し","x":0.05,"y":0.02,"w":0.9,"h":0.08,"color":"black","bold":true},{"type":"bullet","text":"テキスト","x":0.05,"y":0.12,"w":0.85,"h":0.06,"color":"black","bold":false},{"type":"text","text":"その他","x":0.05,"y":0.20,"w":0.85,"h":0.06,"color":"black","bold":false},{"type":"arrow","text":"矢印ラベル","x":0.3,"y":0.40,"w":0.4,"h":0.05,"color":"black","bold":false}],"tables":[{"x":0.0,"y":0.7,"w":1.0,"h":0.25,"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
 
 注意:
-- 文字・数字・記号をすべて漏れなく読む
-- typeはheading/bullet/text/arrowのどれか
-- 表がなければtablesは[]
+- 画像内のすべての文字・数字・記号を漏れなく読む
+- type: heading/bullet/text/arrow のどれか
+- color: black/red/blue/green/orange/purple/pink/gray/brown/yellow
+- 表がなければ tables は []
 - JSONのみ返す。説明文・コードブロック不要"""
 
 
@@ -290,16 +292,30 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
     try:
         data = json.loads(text)
-        # 旧スキーマ（elements）と新スキーマ（items）の両方に対応
+        # items → elements に変換（座標情報も引き継ぐ）
         if "items" in data and "elements" not in data:
             data["elements"] = [
-                {"id": f"el_{i:03d}", "type": it.get("type","text"),
-                 "content": it.get("text",""), "confidence": 1.0,
-                 "position": {}, "style": {}}
+                {
+                    "id": f"el_{i:03d}",
+                    "type":    it.get("type", "text"),
+                    "content": it.get("text", ""),
+                    "confidence": 1.0,
+                    # 正規化座標（0.0〜1.0）
+                    "x": float(it.get("x", 0.0)),
+                    "y": float(it.get("y", 0.0)),
+                    "w": float(it.get("w", 0.9)),
+                    "h": float(it.get("h", 0.06)),
+                    "style": {
+                        "color":   it.get("color", "black"),
+                        "bold":    it.get("bold", False),
+                        "size":    it.get("size", "medium"),
+                    },
+                    "position": {},
+                }
                 for i, it in enumerate(data["items"], 1)
             ]
-            data.setdefault("structure", {"type":"list","groups":[
-                {"label":"内容","items":[f"el_{i:03d}" for i in range(1, len(data["elements"])+1)]}
+            data.setdefault("structure", {"type": "list", "groups": [
+                {"label": "内容", "items": [f"el_{i:03d}" for i in range(1, len(data["elements"]) + 1)]}
             ]})
         return data
     except json.JSONDecodeError as e:
@@ -436,70 +452,77 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
         size=9, color=C_MUTED)
     rect(s, 0.3, 1.08, SLIDE_W - 0.6, SLIDE_H - 1.55, C_NAVY)
 
-    # ─ 要素をソート ─
-    elements   = data.get("elements", [])
-    sorted_els = sorted(elements, key=lambda e: (
-        (e.get("position") or {}).get("zone_row", 1),
-        (e.get("position") or {}).get("zone_col", 0),
-    ))
+    # ── コンテンツエリア定義 ──
+    # タイトルバー下からフッター上までを「コンテンツエリア」とする
+    CX = 0.35              # 左マージン（インチ）
+    CY = 1.10              # コンテンツ開始Y（インチ）
+    CW = SLIDE_W - 0.70    # コンテンツ幅
+    CH = SLIDE_H - 1.55    # コンテンツ高さ（フッター分を引く）
 
-    Y_START = 1.18
-    Y_MAX   = SLIDE_H - 0.55   # フッター上端
+    elements = data.get("elements", [])
 
-    if is_portrait:
-        # ── 縦レイアウト：1カラム ──
-        col_items = sorted_els
-        AVAIL_H   = Y_MAX - Y_START
-        step_h    = max(0.30, min(0.55, AVAIL_H / max(len(col_items), 1)))
-        base_pt   = max(9, min(15, int(step_h * 26)))
+    # 座標情報があれば座標ベース配置、なければ順次配置（フォールバック）
+    has_coords = any("x" in el for el in elements)
 
-        def render_single(items, x_start, col_w):
-            y = Y_START
-            for el in items:
-                if y >= Y_MAX:
-                    break
-                etype   = el.get("type", "text")
-                content = el.get("content", "")
-                style   = el.get("style") or {}
-                color   = resolve_color(style.get("color", "black"))
-                bold    = style.get("bold", False) or (etype == "heading")
-                underl  = style.get("underline", False)
-                circled = style.get("circled", False)
-                size    = {"large": base_pt + 2, "medium": base_pt, "small": base_pt - 2}.get(
-                              style.get("size", "medium"), base_pt)
-                if etype == "heading":
-                    label = f"【{content}】" if circled else content
-                    txt(s, label, x_start, y, col_w, step_h,
-                        size=min(size + 2, base_pt + 3), bold=True, color=color, underline=underl)
-                elif etype == "arrow":
-                    txt(s, f"→ {content}", x_start + 0.1, y, col_w - 0.1, step_h,
-                        size=max(size - 1, 8), color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
-                else:
-                    prefix = "○ " if circled else "• "
-                    txt(s, f"{prefix}{content}", x_start + 0.1, y, col_w - 0.1, step_h,
-                        size=size, bold=bold, color=color, underline=underl)
-                y += step_h
+    if has_coords:
+        # ── 座標ベース配置：画像上の位置をスライドに1:1でマッピング ──
+        for el in sorted(elements, key=lambda e: (e.get("y", 0), e.get("x", 0))):
+            x_pct = float(el.get("x", 0.0))
+            y_pct = float(el.get("y", 0.0))
+            w_pct = float(el.get("w", 0.9))
+            h_pct = float(el.get("h", 0.06))
 
-        render_single(col_items, CONTENT_X, SLIDE_W - 0.8)
+            sx = CX + x_pct * CW
+            sy = CY + y_pct * CH
+            sw = max(0.3, min(w_pct * CW, CX + CW - sx))
+            sh = max(0.15, min(h_pct * CH, CY + CH - sy))
+
+            etype   = el.get("type", "text")
+            content = el.get("content", "")
+            style   = el.get("style") or {}
+            color   = resolve_color(style.get("color", el.get("color", "black")))
+            bold    = style.get("bold", el.get("bold", False)) or (etype == "heading")
+            underl  = style.get("underline", False)
+
+            # 高さからフォントサイズを逆算（0.55は行間係数）
+            font_pt = max(8, min(24, int(sh * 72 * 0.55)))
+
+            if etype == "heading":
+                txt(s, content, sx, sy, sw, sh,
+                    size=min(font_pt + 2, 26), bold=True, color=color, underline=underl)
+            elif etype == "arrow":
+                txt(s, f"→ {content}", sx, sy, sw, sh,
+                    size=font_pt, color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
+            else:
+                txt(s, content, sx, sy, sw, sh,
+                    size=font_pt, bold=bold, color=color, underline=underl)
 
     else:
-        # ── 横レイアウト：2カラム ──
-        col_left  = [e for e in sorted_els if (e.get("position") or {}).get("zone_col", 0) <= 1]
-        col_right = [e for e in sorted_els if (e.get("position") or {}).get("zone_col", 2) == 2]
-        if not col_right and len(col_left) > 3:
-            mid       = len(col_left) // 2
-            col_right = col_left[mid:]
-            col_left  = col_left[:mid]
+        # ── フォールバック：縦/横に応じた順次配置 ──
+        sorted_els = sorted(elements, key=lambda e: (
+            (e.get("position") or {}).get("zone_row", 1),
+            (e.get("position") or {}).get("zone_col", 0),
+        ))
 
-        AVAIL_H = Y_MAX - Y_START
-        max_col = max(len(col_left), len(col_right), 1)
-        step_h  = max(0.28, min(0.52, AVAIL_H / max_col))
+        if is_portrait:
+            items_col = sorted_els
+        else:
+            col_left  = [e for e in sorted_els if (e.get("position") or {}).get("zone_col", 0) <= 1]
+            col_right = [e for e in sorted_els if (e.get("position") or {}).get("zone_col", 2) == 2]
+            if not col_right and len(col_left) > 3:
+                mid       = len(col_left) // 2
+                col_right = col_left[mid:]
+                col_left  = col_left[:mid]
+
+        max_items = len(sorted_els) if is_portrait else max(
+            len(col_left), len(col_right), 1)
+        step_h  = max(0.28, min(0.52, CH / max(max_items, 1)))
         base_pt = max(8, min(14, int(step_h * 26)))
 
-        def render_column(items, x_start, col_w):
-            y = Y_START
+        def render_fallback(items, x_start, col_w):
+            y = CY
             for el in items:
-                if y >= Y_MAX:
+                if y >= CY + CH:
                     break
                 etype   = el.get("type", "text")
                 content = el.get("content", "")
@@ -507,37 +530,44 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
                 color   = resolve_color(style.get("color", "black"))
                 bold    = style.get("bold", False) or (etype == "heading")
                 underl  = style.get("underline", False)
-                circled = style.get("circled", False)
                 size    = {"large": base_pt + 2, "medium": base_pt, "small": base_pt - 2}.get(
                               style.get("size", "medium"), base_pt)
                 if etype == "heading":
-                    label = f"【{content}】" if circled else content
-                    txt(s, label, x_start, y, col_w, step_h,
+                    txt(s, content, x_start, y, col_w, step_h,
                         size=min(size + 2, base_pt + 3), bold=True, color=color, underline=underl)
                 elif etype == "arrow":
                     txt(s, f"→ {content}", x_start + 0.1, y, col_w - 0.1, step_h,
                         size=max(size - 1, 8), color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
                 else:
-                    prefix = "○ " if circled else "• "
-                    txt(s, f"{prefix}{content}", x_start + 0.1, y, col_w - 0.1, step_h,
+                    txt(s, content, x_start + 0.1, y, col_w - 0.1, step_h,
                         size=size, bold=bold, color=color, underline=underl)
                 y += step_h
 
-        render_column(col_left,  0.45, 6.0)
-        render_column(col_right, 6.75, 6.0)
+        if is_portrait:
+            render_fallback(sorted_els, CX, CW)
+        else:
+            render_fallback(col_left,  0.45, 6.0)
+            render_fallback(col_right, 6.75, 6.0)
 
-    # ─ 表を配置 ─
+    # ─ 表を配置（座標ベース対応）─
     for tbl_data in data.get("tables", []):
-        pos   = tbl_data.get("position") or {}
-        tbl_y = Y_START + pos.get("zone_row", 2) * 1.8
-        tbl_x = CONTENT_X + pos.get("zone_col", 0) * (4.3 if not is_portrait else 0)
-        add_table_shape(s, tbl_data, tbl_x, tbl_y,
-                        max_w=SLIDE_W - 0.9, max_h=1.8)
+        if "x" in tbl_data:
+            tbl_x = CX + float(tbl_data.get("x", 0.0)) * CW
+            tbl_y = CY + float(tbl_data.get("y", 0.8)) * CH
+            tbl_w = max(1.0, float(tbl_data.get("w", 1.0)) * CW)
+            tbl_h = max(0.5, float(tbl_data.get("h", 0.2)) * CH)
+        else:
+            pos   = tbl_data.get("position") or {}
+            tbl_y = CY + pos.get("zone_row", 2) * 1.8
+            tbl_x = CX + pos.get("zone_col", 0) * (4.3 if not is_portrait else 0)
+            tbl_w = SLIDE_W - 0.9
+            tbl_h = 1.8
+        add_table_shape(s, tbl_data, tbl_x, tbl_y, max_w=tbl_w, max_h=tbl_h)
 
     # ─ フッター ─
     FOOTER_Y = SLIDE_H - 0.35
     rect(s, 0, FOOTER_Y, SLIDE_W, 0.35, C_NAVY)
-    txt(s, "パシャッと  |  自動生成", CONTENT_X, FOOTER_Y + 0.02, SLIDE_W - 0.5, 0.30,
+    txt(s, "パシャッと  |  自動生成", 0.4, FOOTER_Y + 0.02, SLIDE_W - 0.5, 0.30,
         size=9, color=C_MUTED, align=PP_ALIGN.RIGHT)
 
     buf = io.BytesIO()
