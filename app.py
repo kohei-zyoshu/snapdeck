@@ -381,44 +381,40 @@ SYSTEM_PROMPT = (
 
 
 def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
-    """AIで画像を解析"""
+    """AIで画像を解析（prefill方式でJSON確実取得）"""
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model="claude-opus-4-6",
         max_tokens=4096,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": [
-            {"type": "image", "source": {
-                "type": "base64", "media_type": media_type, "data": img_data
-            }},
-            {"type": "text", "text": EXTRACTION_PROMPT}
-        ]}]
+        messages=[
+            {"role": "user", "content": [
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": media_type, "data": img_data
+                }},
+                {"type": "text", "text": EXTRACTION_PROMPT}
+            ]},
+            # prefill: { を先置きすることでClaudeが必ずJSONを返す
+            {"role": "assistant", "content": "{"}
+        ]
     )
-    text = message.content[0].text.strip()
+    # prefillの { を補って完全なJSONに
+    text = "{" + message.content[0].text.strip()
 
-    # ① コードブロックを除去（念のため）
-    text = re.sub(r'```(?:json)?\s*', '', text)
-    text = re.sub(r'```', '', text).strip()
-
-    # ② { ... } を抽出（最初の { から最後の } まで）
-    start = text.find('{')
-    end   = text.rfind('}')
-    if start != -1 and end != -1 and end > start:
-        text = text[start:end+1]
+    # 最後の } の後を切り捨て（余分なテキストがあっても安全）
+    end = text.rfind('}')
+    if end != -1:
+        text = text[:end+1]
     else:
         raise ValueError(f"AIの応答にJSONが含まれていません。応答内容：{text[:300]}")
 
-    # ③ JSONパース
+    # 制御文字除去してJSONパース
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
     try:
         return json.loads(text)
-    except json.JSONDecodeError:
-        # 制御文字などを除去して再試行
-        text_clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
-        try:
-            return json.loads(text_clean)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"JSONの解析に失敗しました: {e}\n応答の先頭: {text[:300]}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"JSONの解析に失敗しました: {e}\n応答の先頭: {text[:300]}")
 
 
 def get_demo_data() -> dict:
