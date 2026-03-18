@@ -336,71 +336,18 @@ def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
     return base64.standard_b64encode(buf.getvalue()).decode("utf-8"), "image/jpeg"
 
 
-EXTRACTION_PROMPT = """
-あなたはOCRと文書レイアウト解析の専門家です。
-添付の画像（ホワイトボード・手書きメモ・印刷物など）を精密に分析し、
-アナログ文書をデジタルで忠実に再現するためのすべての情報を抽出してください。
+EXTRACTION_PROMPT = """画像（ホワイトボード・手書きメモ）を解析し、以下のJSON形式だけを返してください。説明文・コードブロック・前置きは一切不要です。
 
-【読み取り対象】
-1. すべての文字・数字・記号（かすれ・薄い・小さい文字も含む）
-2. 文字の色（黒・赤・青・緑・オレンジ・紫・ピンク・茶色・グレー等）
-3. 文字スタイル（太字・下線・丸囲み・二重線・取り消し線）
-4. ページ上の位置（上段/中段/下段 × 左/中央/右 の9ゾーン）
-5. 表・罫線の構造（ヘッダー行・データ行・列の区分け）
-6. 矢印・接続線・囲み図形
-7. 文字と文字の間隔（密集/通常/広め）
-8. 画像全体の傾き（補正が必要な角度）
+{"title":"タイトル","elements":[{"id":"el_001","type":"heading","content":"テキスト","position":{"zone_row":0,"zone_col":0},"style":{"color":"black","bold":false,"underline":false,"circled":false,"size":"large"},"confidence":0.95}],"tables":[{"id":"tbl_001","position":{"zone_row":1,"zone_col":0},"headers":["列1","列2"],"rows":[["値1","値2"]]}],"structure":{"type":"list","groups":[{"label":"グループ名","items":["el_001"]}]},"language":"ja","notes":""}
 
-以下のJSON形式のみで返答してください（前置き・説明文・コードブロック不要）:
-
-{
-  "title": "文書のタイトルまたは主題（画像から推定）",
-  "orientation_degrees": 0,
-  "elements": [
-    {
-      "id": "el_001",
-      "type": "heading",
-      "content": "読み取ったテキスト",
-      "position": { "zone_row": 0, "zone_col": 0 },
-      "style": {
-        "color": "black",
-        "bold": false,
-        "underline": false,
-        "circled": false,
-        "strikethrough": false,
-        "size": "large"
-      },
-      "level": 1,
-      "confidence": 0.95
-    }
-  ],
-  "tables": [
-    {
-      "id": "tbl_001",
-      "position": { "zone_row": 1, "zone_col": 1 },
-      "headers": ["列名1", "列名2"],
-      "rows": [["データ1", "データ2"], ["データ3", "データ4"]]
-    }
-  ],
-  "structure": {
-    "type": "list",
-    "groups": [
-      { "label": "グループ名", "items": ["el_001", "el_002"] }
-    ]
-  },
-  "language": "ja",
-  "notes": "読み取れなかった箇所や補足"
-}
-
-【フィールドの定義】
-- orientation_degrees: 画像を正位置にするために必要な回転角度（0/90/180/270）
-- zone_row: 0=上段, 1=中段, 2=下段
-- zone_col: 0=左, 1=中央, 2=右
-- type: heading（見出し）/ bullet（箇条書き）/ text（本文）/ table（表）/ arrow（矢印・接続）
-- color: black / red / blue / green / orange / purple / pink / gray / brown / yellow
-- size: large（大）/ medium（中）/ small（小）
-- tablesがない場合は空配列 [] を返すこと
-"""
+ルール:
+- すべての文字・数字・記号を漏れなく読む（かすれ・小さい文字も含む）
+- type: heading / bullet / text / arrow のいずれか
+- zone_row: 0=上 1=中 2=下、zone_col: 0=左 1=中 2=右
+- color: black/red/blue/green/orange/purple/pink/gray/brown/yellow
+- size: large/medium/small
+- 表がなければ tables は []
+- 必ず { で始まり } で終わる純粋なJSONのみ返すこと"""
 
 
 @st.cache_data(show_spinner=False)
@@ -419,13 +366,27 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
         ]}]
     )
     text = message.content[0].text.strip()
-    # ```json ... ``` や ``` ... ``` のコードブロックを除去
-    text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.MULTILINE)
-    text = re.sub(r'\s*```$',          '', text, flags=re.MULTILINE)
-    text = text.strip()
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    raw = match.group() if match else text
-    return json.loads(raw)
+
+    # ① コードブロックを除去
+    text = re.sub(r'```(?:json)?\s*', '', text)
+    text = re.sub(r'```', '', text).strip()
+
+    # ② { ... } を抽出（最初の { から最後の } まで）
+    start = text.find('{')
+    end   = text.rfind('}')
+    if start != -1 and end != -1 and end > start:
+        text = text[start:end+1]
+
+    # ③ JSONパース（失敗したら最低限のデータを返す）
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # 制御文字などを除去して再試行
+        text_clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
+        try:
+            return json.loads(text_clean)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"JSONの解析に失敗しました: {e}\n応答の先頭: {text[:200]}")
 
 
 def get_demo_data() -> dict:
@@ -761,16 +722,7 @@ convert_btn = st.button(
     disabled=not can_convert,
 )
 
-st.markdown(
-    "<p style='text-align:center; color:#7A9AAD; font-size:1.05rem; margin:0.8rem 0 0.4rem;'>"
-    "— または —"
-    "</p>",
-    unsafe_allow_html=True)
-
-demo_btn = st.button(
-    "🎯　サンプルで試す",
-    use_container_width=True,
-)
+demo_btn = False
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 変換処理
