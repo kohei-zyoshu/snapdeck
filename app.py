@@ -266,7 +266,7 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4096,
+        max_tokens=8192,
         messages=[
             {"role": "user", "content": [
                 {"type": "image", "source": {
@@ -286,7 +286,7 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     start = text.find("{")
     end   = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"__RAW__:{raw[:500]}")
+        raise ValueError(f"応答にJSONが見つかりません（応答の先頭: {raw[:200]}）")
     text = text[start:end + 1]
 
     # ③ 制御文字を除去してパース
@@ -321,7 +321,7 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
             ]})
         return data
     except json.JSONDecodeError as e:
-        raise ValueError(f"__RAW__:{raw[:500]}\n__ERR__:{e}")
+        raise ValueError(f"JSON解析エラー: {e}\n応答の先頭: {text[:200]}")
 
 
 def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
