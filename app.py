@@ -265,8 +265,8 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=8192,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=6000,
         messages=[
             {"role": "user", "content": [
                 {"type": "image", "source": {
