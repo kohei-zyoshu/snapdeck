@@ -16,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ─── CSS（女性向け・温かみのあるローズテーマ） ──────────────────────────────
+# ─── CSS（20代女性向け・グラデーションバイオレット） ────────────────────────
 st.markdown("""
 <style>
 /* ── Streamlit UI を非表示 ── */
@@ -30,22 +30,26 @@ a[href*="streamlit.io"] { display: none !important; }
 .viewerBadge_container__r5tak { display: none !important; }
 .stActionButton { display: none !important; }
 
-/* ── 全体背景（温かみのあるクリーム） ── */
-.stApp { background: #FBF6F7; }
+/* ── モバイルタップ最適化（効果音・ハイライト抑制） ── */
+* { -webkit-tap-highlight-color: transparent; }
+button, a { touch-action: manipulation; -webkit-appearance: none; }
+
+/* ── 全体背景（クリーンホワイト） ── */
+.stApp { background: #FFFFFF; }
 .main .block-container { padding: 0 1rem 5rem; max-width: 560px; }
 
-/* ── 固定ヘッダーバー（深みのあるプラム） ── */
+/* ── 固定ヘッダーバー（グラデーション） ── */
 .top-bar {
     position: sticky;
     top: 0;
     z-index: 999;
-    background: #7D3454;
-    padding: 0.55rem 1.2rem;
+    background: linear-gradient(135deg, #6D28D9 0%, #A855F7 55%, #EC4899 100%);
+    padding: 0.6rem 1.2rem;
     margin: 0 -1rem 1.6rem;
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    box-shadow: 0 2px 12px rgba(125,52,84,0.28);
+    box-shadow: 0 3px 16px rgba(109,40,217,0.30);
 }
 .top-bar-logo {
     font-size: 1.55rem;
@@ -54,12 +58,12 @@ a[href*="streamlit.io"] { display: none !important; }
     letter-spacing: -0.01em;
     line-height: 1;
 }
-.top-bar-logo em { color: #F4B8CA; font-style: normal; }
+.top-bar-logo em { color: #FDE8FF; font-style: normal; }
 .top-bar-tagline {
     font-size: 0.88rem;
-    color: #E8C4CE;
+    color: rgba(255,255,255,0.80);
     font-weight: 500;
-    line-height: 1.3;
+    line-height: 1.35;
 }
 
 /* ── ステップラベル ── */
@@ -67,129 +71,132 @@ a[href*="streamlit.io"] { display: none !important; }
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    font-size: 1.45rem;
+    font-size: 1.35rem;
     font-weight: 800;
-    color: #3A1E28;
+    color: #1E1B4B;
     margin: 2rem 0 0.6rem;
 }
 .snum {
-    background: #C2587A;
+    background: linear-gradient(135deg, #7C3AED, #A855F7);
     color: #fff;
     border-radius: 50%;
-    width: 42px; height: 42px;
-    line-height: 42px;
+    width: 40px; height: 40px;
+    line-height: 40px;
     text-align: center;
-    font-size: 1.15rem;
+    font-size: 1.1rem;
     font-weight: 900;
     flex-shrink: 0;
+    box-shadow: 0 3px 10px rgba(124,58,237,0.35);
 }
 
 /* ── ヒント・説明文 ── */
 .hint {
-    color: #5C2A3C;
-    font-size: 1.1rem;
+    color: #3B0764;
+    font-size: 1.05rem;
     margin: 0 0 1rem;
     line-height: 1.8;
-    background: #FDF0F3;
-    border-left: 4px solid #C2587A;
+    background: #F5F3FF;
+    border-left: 4px solid #7C3AED;
     border-radius: 0 8px 8px 0;
     padding: 0.75rem 1rem;
 }
 
-/* ── ボタン全般（大きく・見やすく） ── */
+/* ── ボタン全般 ── */
 .stButton > button {
-    font-size: 1.3rem !important;
-    min-height: 72px !important;
-    border-radius: 20px !important;
+    font-size: 1.2rem !important;
+    min-height: 66px !important;
+    border-radius: 18px !important;
     font-weight: 800 !important;
     width: 100% !important;
-    letter-spacing: 0.03em !important;
-    transition: opacity 0.15s !important;
+    letter-spacing: 0.02em !important;
+    transition: opacity 0.12s, transform 0.1s !important;
+    cursor: pointer !important;
 }
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #C2587A 0%, #A0456A 100%) !important;
+    background: linear-gradient(135deg, #7C3AED 0%, #A855F7 50%, #EC4899 100%) !important;
     color: white !important;
     border: none !important;
-    box-shadow: 0 5px 18px rgba(194,88,122,0.38) !important;
+    box-shadow: 0 5px 20px rgba(124,58,237,0.40) !important;
 }
-.stButton > button[kind="primary"]:hover { opacity: 0.88 !important; }
+.stButton > button[kind="primary"]:hover  { opacity: 0.88 !important; }
+.stButton > button[kind="primary"]:active { transform: scale(0.97) !important; }
 .stButton > button[kind="secondary"] {
-    background: #FDF0F3 !important;
-    color: #5C2A3C !important;
-    border: 2px solid #E0AABB !important;
+    background: #F5F3FF !important;
+    color: #4C1D95 !important;
+    border: 2px solid #C4B5FD !important;
 }
-.stButton > button:disabled { opacity: 0.38 !important; cursor: not-allowed !important; }
+.stButton > button:disabled { opacity: 0.35 !important; cursor: not-allowed !important; }
 
-/* ── ダウンロードボタン（ミント） ── */
+/* ── ダウンロードボタン（メイン：グラデーション） ── */
 .stDownloadButton > button {
-    background: linear-gradient(135deg, #4CAF7F 0%, #3A9B6A 100%) !important;
-    color: white !important;
-    font-size: 1.3rem !important;
-    min-height: 72px !important;
-    border-radius: 20px !important;
+    font-size: 1.2rem !important;
+    min-height: 66px !important;
+    border-radius: 18px !important;
     font-weight: 800 !important;
     width: 100% !important;
     border: none !important;
-    box-shadow: 0 5px 18px rgba(76,175,127,0.35) !important;
-    letter-spacing: 0.03em !important;
+    letter-spacing: 0.02em !important;
+    transition: opacity 0.12s, transform 0.1s !important;
+    cursor: pointer !important;
 }
+.stDownloadButton > button:active { transform: scale(0.97) !important; }
 
 /* ── 完了ボックス ── */
 .done-box {
-    background: #FCE8EF;
-    border: 2.5px solid #C2587A;
-    border-radius: 16px;
-    padding: 1.4rem 1.6rem;
-    font-size: 1.2rem;
-    color: #5C2A3C;
+    background: #FAF5FF;
+    border: 2px solid #A855F7;
+    border-radius: 14px;
+    padding: 1.2rem 1.4rem;
+    font-size: 1.1rem;
+    color: #4C1D95;
     font-weight: 700;
     margin: 1.2rem 0;
-    line-height: 1.9;
+    line-height: 1.8;
 }
 
 /* ── ファイルアップローダー ── */
 [data-testid="stFileUploaderDropzone"] {
     min-height: 150px;
     border-radius: 14px !important;
-    border: 2.5px dashed #E0AABB !important;
-    background: #FDF5F7 !important;
+    border: 2.5px dashed #C4B5FD !important;
+    background: #FAFAFF !important;
 }
 [data-testid="stFileUploaderDropzoneInstructions"] span,
 [data-testid="stFileUploaderDropzoneInstructions"] small { display: none !important; }
 [data-testid="stFileUploaderDropzoneInstructions"]::before {
     content: "写真をドラッグするか、下のボタンで選んでください";
     display: block;
-    font-size: 1.05rem;
-    color: #7A4458;
-    margin-bottom: 0.6rem;
+    font-size: 1.0rem;
+    color: #5B21B6;
+    margin-bottom: 0.5rem;
     text-align: center;
 }
 [data-testid="stFileUploaderDropzoneInstructions"]::after {
     content: "対応形式：JPG・PNG・WebP　最大20MBまで";
     display: block;
-    font-size: 0.9rem;
-    color: #C090A0;
+    font-size: 0.85rem;
+    color: #8B5CF6;
     text-align: center;
     margin-top: 0.3rem;
 }
 [data-testid="stFileUploaderDropzone"] button {
     font-size: 0 !important;
-    min-height: 52px !important;
+    min-height: 50px !important;
     border-radius: 12px !important;
     padding: 0 1.5rem !important;
 }
 [data-testid="stFileUploaderDropzone"] button::after {
-    content: "📷　写真を撮る・選ぶ";
-    font-size: 1.05rem;
+    content: "写真を撮る・選ぶ";
+    font-size: 1.0rem;
     font-weight: 700;
 }
 
 /* ── その他 ── */
-.stToggle label { font-size: 1.1rem !important; font-weight: 700 !important; }
-.stExpander summary p { font-size: 1.1rem !important; font-weight: 600 !important; }
-hr { margin: 1.6rem 0 !important; border-color: #F0D0DA !important; border-width: 1.5px !important; }
-.stAlert p { font-size: 1.05rem !important; line-height: 1.7 !important; }
-.stSpinner p { font-size: 1.1rem !important; }
+.stToggle label { font-size: 1.05rem !important; font-weight: 700 !important; }
+.stExpander summary p { font-size: 1.05rem !important; font-weight: 600 !important; }
+hr { margin: 1.6rem 0 !important; border-color: #EDE9FE !important; border-width: 1.5px !important; }
+.stAlert p { font-size: 1.0rem !important; line-height: 1.7 !important; }
+.stSpinner p { font-size: 1.05rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -210,15 +217,33 @@ def get_api_key() -> str:
     return st.session_state.get("api_key_input", "").strip()
 
 
-def preprocess_image(img: Image.Image, do_trim: bool = True) -> Image.Image:
-    """EXIF回転 → 余白カット"""
+def remove_shadows(img: Image.Image) -> Image.Image:
+    """影・逆光を補正（Retinex 方式：局所輝度を正規化）"""
+    import numpy as np
+    from PIL import ImageFilter
+    arr    = np.array(img, dtype=np.float32)
+    radius = max(40, min(img.width, img.height) // 6)
+    blur   = np.array(img.filter(ImageFilter.GaussianBlur(radius=radius)),
+                      dtype=np.float32)
+    # 背景輝度で割って均一化（暗い部分を持ち上げ、明るい部分を抑制）
+    norm   = arr / (blur / 160.0 + 0.5)
+    norm   = np.clip(norm, 0, 255).astype(np.uint8)
+    return Image.fromarray(norm)
+
+
+def preprocess_image(img: Image.Image,
+                     do_trim: bool = True,
+                     do_shadow: bool = False) -> Image.Image:
+    """EXIF回転 → 影補正（オプション）→ 余白カット"""
     try:
         img = ImageOps.exif_transpose(img)
     except Exception:
         pass
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    if do_shadow:
+        img = remove_shadows(img)
     if do_trim:
-        if img.mode != "RGB":
-            img = img.convert("RGB")
         bg   = Image.new("RGB", img.size, (255, 255, 255))
         diff = ImageChops.difference(img, bg)
         bbox = diff.getbbox()
@@ -599,6 +624,123 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
     return buf.getvalue()
 
 
+def generate_html(data: dict) -> bytes:
+    """iPhone Safari でそのまま開けるHTMLを生成"""
+    title = data.get("title", "メモ")
+    elements = sorted(data.get("elements", []),
+                      key=lambda e: (float(e.get("y", 0)), float(e.get("x", 0))))
+    CMAP = {
+        "black": "#1E1B4B", "white": "#6B7280", "red": "#DC2626",
+        "blue": "#2563EB", "green": "#16A34A", "yellow": "#CA8A04",
+        "orange": "#EA580C", "purple": "#7C3AED", "pink": "#DB2777",
+        "gray": "#6B7280", "brown": "#92400E",
+    }
+    rows = ""
+    list_open = False
+    for el in elements:
+        etype   = el.get("type", "text")
+        content = el.get("content", "")
+        shape   = el.get("shape", "none")
+        style   = el.get("style") or {}
+        color   = CMAP.get(style.get("color", el.get("color", "black")), "#1E1B4B")
+        bold    = style.get("bold", False) or etype == "heading"
+        fw      = "700" if bold else "400"
+
+        if etype == "bullet":
+            if not list_open:
+                rows += "<ul>"
+                list_open = True
+            rows += f"<li style='color:{color}; font-weight:{fw};'>{content}</li>"
+            continue
+        if list_open:
+            rows += "</ul>"
+            list_open = False
+
+        if etype == "heading":
+            rows += (f"<h2 style='color:{color}; margin:1.4rem 0 0.4rem;"
+                     f" font-size:1.2rem;'>{content}</h2>")
+        elif etype == "arrow":
+            rows += (f"<p style='color:#7C3AED; margin:0.5rem 0;"
+                     f" font-weight:{fw};'>&rarr;&nbsp;{content}</p>")
+        elif shape == "rect":
+            rows += (f"<p style='color:{color}; border:2px solid {color};"
+                     f" border-radius:6px; padding:0.25rem 0.75rem;"
+                     f" display:inline-block; margin:0.4rem 0; font-weight:{fw};'>"
+                     f"{content}</p><br>")
+        elif shape == "ellipse":
+            rows += (f"<p style='color:{color}; border:2px solid {color};"
+                     f" border-radius:50px; padding:0.25rem 1rem;"
+                     f" display:inline-block; margin:0.4rem 0; font-weight:{fw};'>"
+                     f"{content}</p><br>")
+        else:
+            rows += f"<p style='color:{color}; margin:0.35rem 0; font-weight:{fw};'>{content}</p>"
+
+    if list_open:
+        rows += "</ul>"
+
+    # テーブル
+    for tbl in data.get("tables", []):
+        headers = tbl.get("headers", [])
+        trows   = tbl.get("rows", [])
+        if not headers and not trows:
+            continue
+        rows += "<table style='border-collapse:collapse; width:100%; margin:1rem 0;'>"
+        if headers:
+            rows += "<tr>"
+            for h in headers:
+                rows += (f"<th style='background:#7C3AED; color:#fff; padding:0.4rem 0.6rem;"
+                         f" font-size:0.9rem; text-align:left; border:1px solid #C4B5FD;'>{h}</th>")
+            rows += "</tr>"
+        for i, row in enumerate(trows):
+            bg = "#F5F3FF" if i % 2 == 0 else "#FFFFFF"
+            rows += f"<tr style='background:{bg};'>"
+            for cell in row:
+                rows += (f"<td style='padding:0.35rem 0.6rem; font-size:0.9rem;"
+                         f" border:1px solid #EDE9FE; color:#1E1B4B;'>{cell}</td>")
+            rows += "</tr>"
+        rows += "</table>"
+
+    ts = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    html = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title} — パシャッと</title>
+<style>
+  body {{ font-family: -apple-system, 'Hiragino Sans', 'Yu Gothic', sans-serif;
+          background: #F5F3FF; margin: 0; padding: 1rem; color: #1E1B4B; }}
+  .card {{ background: #fff; border-radius: 16px; padding: 1.5rem 1.6rem;
+           box-shadow: 0 2px 16px rgba(109,40,217,0.12); max-width: 700px;
+           margin: 0 auto; }}
+  .header {{ background: linear-gradient(135deg,#6D28D9,#A855F7,#EC4899);
+             border-radius: 12px; padding: 1rem 1.4rem; margin-bottom: 1.2rem; }}
+  .header h1 {{ color: #fff; margin: 0; font-size: 1.3rem; }}
+  .header p  {{ color: rgba(255,255,255,0.75); margin: 0.3rem 0 0;
+                font-size: 0.8rem; }}
+  hr  {{ border: none; border-top: 1px solid #EDE9FE; margin: 1rem 0; }}
+  ul  {{ padding-left: 1.4rem; }}
+  li  {{ margin: 0.3rem 0; line-height: 1.7; }}
+  p   {{ line-height: 1.7; }}
+  footer {{ text-align: center; color: #A78BFA; font-size: 0.75rem;
+            margin-top: 1.5rem; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header">
+    <h1>{title}</h1>
+    <p>{ts} 変換 &#124; パシャッと</p>
+  </div>
+  <hr>
+  {rows}
+</div>
+<footer>パシャッと — AI文字認識による自動変換</footer>
+</body>
+</html>"""
+    return html.encode("utf-8")
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ─── 画面表示 ────────────────────────────────────────────
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -606,7 +748,7 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
 st.markdown("""
 <div class='top-bar'>
   <div class='top-bar-logo'>パシャッ<em>と</em></div>
-  <div class='top-bar-tagline'>大切なメモを<br>きれいなスライドへ ✨</div>
+  <div class='top-bar-tagline'>大切なメモを<br>きれいなスライドへ</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -632,7 +774,7 @@ st.markdown(
     "<div class='step'><span class='snum'>１</span>写真を選ぶ</div>",
     unsafe_allow_html=True)
 st.markdown(
-    "<div class='hint'>ホワイトボードやメモ帳の写真を選ぶだけ。あとはAIがきれいに仕上げます 🌸</div>",
+    "<div class='hint'>ホワイトボードやメモ帳の写真を選ぶだけ。あとはAIがきれいに仕上げます。</div>",
     unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader(
@@ -657,16 +799,21 @@ if uploaded_file:
     st.markdown("---")
 
     do_trim = st.toggle(
-        "✂️　余白を自動カット（おすすめ）",
+        "余白を自動カット（おすすめ）",
         value=True,
         help="不要な余白を取り除いて、読み取り精度をアップします。",
     )
+    do_shadow = st.toggle(
+        "影・逆光を補正する",
+        value=False,
+        help="照明が偏っている写真や影が入っている場合に効果的です。",
+    )
 
-    display_img = preprocess_image(pil_image, do_trim=do_trim)
+    display_img = preprocess_image(pil_image, do_trim=do_trim, do_shadow=do_shadow)
     # 画像の縦横を判定してスライド向きを決定
     is_portrait = display_img.height > display_img.width
     orient_label = "縦（ポートレート）" if is_portrait else "横（ランドスケープ）"
-    st.caption(f"📐 スライド向き：{orient_label} で出力します")
+    st.caption(f"スライド向き：{orient_label} で出力します")
 
     st.image(display_img, caption="変換する写真", use_container_width=True)
     img_data, media_type = pil_to_base64(display_img)
@@ -682,13 +829,13 @@ st.markdown(
 
 if not uploaded_file:
     st.markdown(
-        "<div class='hint' style='border-color:#E0AABB; background:#FEF5F7;'>"
-        "↑ まず写真を選んでみてください 📷"
+        "<div class='hint' style='border-color:#C4B5FD; background:#F5F3FF;'>"
+        "まず写真を選んでください。"
         "</div>",
         unsafe_allow_html=True)
 
 convert_btn = st.button(
-    "✨　スライドに変えてみる",
+    "スライドに変換する",
     type="primary",
     use_container_width=True,
     disabled=not uploaded_file,
@@ -714,17 +861,18 @@ if convert_btn and img_data:
 
         extracted = analyze_with_claude(img_data, media_type, api_key)
 
-        status.markdown("**③ 文字の読み取りが完了しました ✅**")
-        progress.progress(75)
+        status.markdown("**③ 文字の読み取りが完了しました**")
+        progress.progress(70)
         status.markdown("**④ スライドを作成しています…**")
-        progress.progress(90)
+        progress.progress(88)
 
         is_portrait = st.session_state.get("is_portrait", False)
-        st.session_state["extracted"]  = extracted
-        st.session_state["pptx_bytes"] = generate_pptx(extracted, is_portrait=is_portrait)
+        st.session_state["extracted"]   = extracted
+        st.session_state["pptx_bytes"]  = generate_pptx(extracted, is_portrait=is_portrait)
+        st.session_state["html_bytes"]  = generate_html(extracted)
 
         progress.progress(100)
-        status.markdown("**✅ 完了しました！下にスクロールして保存してください。**")
+        status.markdown("**完了しました。下にスクロールして保存してください。**")
 
     except Exception as e:
         err_msg = str(e)
@@ -743,8 +891,9 @@ if convert_btn and img_data:
 # ステップ３　保存する
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 if "extracted" in st.session_state:
-    extracted  = st.session_state["extracted"]
-    pptx_bytes = st.session_state.get("pptx_bytes")
+    extracted   = st.session_state["extracted"]
+    pptx_bytes  = st.session_state.get("pptx_bytes")
+    html_bytes  = st.session_state.get("html_bytes")
 
     st.markdown("---")
     st.markdown(
@@ -753,57 +902,75 @@ if "extracted" in st.session_state:
 
     elements = extracted.get("elements", [])
     el_count = len(elements)
-    st.markdown(f"""
-<div class='done-box'>
-✅ 完了　読み取り：<strong>{el_count} 件</strong>
-</div>
-""", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='done-box'>完了 — 読み取り：<strong>{el_count} 件</strong></div>",
+        unsafe_allow_html=True)
 
     # ── 読み取り結果をリストで表示 ──
     if elements:
         sorted_els = sorted(elements,
                             key=lambda e: (float(e.get("y", 0)), float(e.get("x", 0))))
-        TYPE_ICON  = {"heading": "📌", "bullet": "・", "arrow": "→", "text": "　"}
-        SHAPE_ICON = {"rect": "▭ ", "ellipse": "◯ "}
+        TYPE_PFX   = {"heading": "■ ", "bullet": "・", "arrow": "→ ", "text": ""}
+        SHAPE_PFX  = {"rect": "[四] ", "ellipse": "(丸) "}
         rows_html  = ""
         for el in sorted_els:
             etype   = el.get("type", "text")
             content = el.get("content", "")
             shape   = el.get("shape", "none")
-            icon    = SHAPE_ICON.get(shape, TYPE_ICON.get(etype, "　"))
-            bold    = "font-weight:700;" if etype == "heading" else ""
+            prefix  = SHAPE_PFX.get(shape, TYPE_PFX.get(etype, ""))
+            fw      = "700" if etype == "heading" else "400"
             rows_html += (
-                f"<div style='padding:0.35rem 0.5rem; border-bottom:1px solid #e0eaf0;"
-                f" font-size:1rem; {bold}'>{icon}{content}</div>"
+                f"<div style='padding:0.35rem 0.55rem; border-bottom:1px solid #EDE9FE;"
+                f" font-size:0.95rem; font-weight:{fw}; color:#1E1B4B;'>"
+                f"{prefix}{content}</div>"
             )
         st.markdown(
-            f"<div style='background:#fff; border:1.5px solid #C8D8E4; border-radius:10px;"
-            f" max-height:260px; overflow-y:auto; margin-bottom:1rem;'>"
+            f"<div style='background:#fff; border:1.5px solid #C4B5FD; border-radius:10px;"
+            f" max-height:260px; overflow-y:auto; margin-bottom:1.2rem;'>"
             f"{rows_html}</div>",
             unsafe_allow_html=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    if pptx_bytes:
+    # ── iPhone 向け HTML ダウンロード（メイン） ──
+    if html_bytes:
+        st.markdown(
+            "<div style='font-size:0.9rem; color:#7C3AED; margin-bottom:0.4rem;"
+            " font-weight:600;'>iPhone でそのまま開けます</div>",
+            unsafe_allow_html=True)
         st.download_button(
-            label="💾　パワーポイントで保存する",
+            label="HTMLで保存する（iPhone対応）",
+            data=html_bytes,
+            file_name=f"パシャッと_{ts}.html",
+            mime="text/html",
+            use_container_width=True,
+        )
+
+    # ── PowerPoint ダウンロード（サブ） ──
+    if pptx_bytes:
+        st.markdown(
+            "<div style='font-size:0.9rem; color:#6B7280; margin:0.8rem 0 0.4rem;"
+            " font-weight:600;'>PC・PowerPoint 用</div>",
+            unsafe_allow_html=True)
+        st.download_button(
+            label="PowerPoint で保存する",
             data=pptx_bytes,
             file_name=f"パシャッと_{ts}.pptx",
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             use_container_width=True,
         )
 
-    with st.expander("📋　読み取り内容を確認する"):
+    with st.expander("読み取り内容を確認する"):
         elmap = {el["id"]: el for el in extracted.get("elements", [])}
         for group in extracted.get("structure", {}).get("groups", []):
             st.markdown(f"**{group.get('label', 'グループ')}**")
             for iid in group.get("items", []):
                 el = elmap.get(iid)
                 if el:
-                    icon = "📌" if el.get("type") == "heading" else "・"
-                    conf = el.get("confidence", 1.0)
+                    prefix = "■ " if el.get("type") == "heading" else "・"
+                    conf   = el.get("confidence", 1.0)
                     st.markdown(
-                        f"&nbsp;&nbsp;{icon} {el['content']} "
+                        f"&nbsp;&nbsp;{prefix} {el['content']} "
                         f"<span style='color:#9CA3AF; font-size:0.85rem;'>（確度 {conf*100:.0f}%）</span>",
                         unsafe_allow_html=True)
         st.markdown("---")
@@ -812,7 +979,7 @@ if "extracted" in st.session_state:
             ensure_ascii=False, indent=2,
         )
         st.download_button(
-            label="📄　テキストで保存する",
+            label="テキスト（JSON）で保存する",
             data=json_str,
             file_name=f"パシャッと_テキスト_{ts}.json",
             mime="application/json",
@@ -822,7 +989,7 @@ if "extracted" in st.session_state:
 # ── フッター ──
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown(
-    "<div style='text-align:center; color:#C090A0; font-size:0.9rem; line-height:2;'>"
-    "AI文字認識による自動変換サービス<br>© 2026 パシャッと 🌸"
+    "<div style='text-align:center; color:#A78BFA; font-size:0.85rem; line-height:2;'>"
+    "AI文字認識による自動変換サービス<br>&copy; 2026 パシャッと"
     "</div>",
     unsafe_allow_html=True)
