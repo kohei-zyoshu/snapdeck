@@ -249,11 +249,12 @@ def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
 EXTRACTION_PROMPT = """この画像（ホワイトボード・手書きメモ）に書かれたすべての文字を読み取り、次のJSON形式で返してください。
 座標は画像全体を幅1.0・高さ1.0として正規化（x=左端, y=上端, w=幅, h=高さ）。
 
-{"title":"タイトル","items":[{"type":"heading","text":"見出し","x":0.05,"y":0.02,"w":0.9,"h":0.08,"color":"black","bold":true},{"type":"bullet","text":"テキスト","x":0.05,"y":0.12,"w":0.85,"h":0.06,"color":"black","bold":false},{"type":"text","text":"その他","x":0.05,"y":0.20,"w":0.85,"h":0.06,"color":"black","bold":false},{"type":"arrow","text":"矢印ラベル","x":0.3,"y":0.40,"w":0.4,"h":0.05,"color":"black","bold":false}],"tables":[{"x":0.0,"y":0.7,"w":1.0,"h":0.25,"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
+{"title":"タイトル","items":[{"type":"heading","text":"見出し","x":0.05,"y":0.02,"w":0.9,"h":0.08,"color":"black","bold":true,"shape":"none"},{"type":"bullet","text":"テキスト","x":0.05,"y":0.12,"w":0.85,"h":0.06,"color":"black","bold":false,"shape":"none"},{"type":"text","text":"囲み文字","x":0.1,"y":0.22,"w":0.35,"h":0.12,"color":"red","bold":false,"shape":"rect"},{"type":"text","text":"丸囲み","x":0.55,"y":0.22,"w":0.3,"h":0.10,"color":"blue","bold":false,"shape":"ellipse"},{"type":"arrow","text":"矢印ラベル","x":0.3,"y":0.40,"w":0.4,"h":0.05,"color":"black","bold":false,"shape":"none"}],"tables":[{"x":0.0,"y":0.7,"w":1.0,"h":0.25,"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
 
 注意:
 - 画像内のすべての文字・数字・記号を漏れなく読む
 - type: heading/bullet/text/arrow のどれか
+- shape: 四角で囲まれていれば "rect"、丸で囲まれていれば "ellipse"、囲みなしは "none"
 - color: black/red/blue/green/orange/purple/pink/gray/brown/yellow
 - 表がなければ tables は []
 - JSONのみ返す。説明文・コードブロック不要"""
@@ -305,6 +306,7 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
                     "y": float(it.get("y", 0.0)),
                     "w": float(it.get("w", 0.9)),
                     "h": float(it.get("h", 0.06)),
+                    "shape": it.get("shape", "none"),
                     "style": {
                         "color":   it.get("color", "black"),
                         "bold":    it.get("bold", False),
@@ -396,6 +398,31 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
         r.font.color.rgb = color
         r.font.name      = "Noto Sans JP"
 
+    def shape_txt(slide, shape_type, text, x, y, w, h,
+                  size=13, bold=False, color=None, underline=False):
+        """テキスト付きオートシェイプ（rect / ellipse）を追加"""
+        SHAPE_ID = {"rect": 1, "ellipse": 9, "rounded_rect": 5}
+        sid = SHAPE_ID.get(shape_type, 1)
+        color = color or C_LIGHT
+        sh = slide.shapes.add_shape(sid,
+                                    Inches(x), Inches(y), Inches(w), Inches(h))
+        # 塗りつぶし：ネイビー + テキスト色のボーダー
+        sh.fill.solid()
+        sh.fill.fore_color.rgb = C_NAVY
+        sh.line.color.rgb = color
+        sh.line.width = Pt(1.5)
+        tf = sh.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.alignment = PP_ALIGN.CENTER
+        r = p.add_run()
+        r.text           = text
+        r.font.size      = Pt(size)
+        r.font.bold      = bold
+        r.font.underline = underline
+        r.font.color.rgb = color
+        r.font.name      = "Noto Sans JP"
+
     def add_table_shape(slide, tbl_data, x, y, max_w, max_h):
         headers = tbl_data.get("headers", [])
         rows    = tbl_data.get("rows", [])
@@ -472,29 +499,34 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
             w_pct = float(el.get("w", 0.9))
             h_pct = float(el.get("h", 0.06))
 
-            sx = CX + x_pct * CW
-            sy = CY + y_pct * CH
-            sw = max(0.3, min(w_pct * CW, CX + CW - sx))
-            sh = max(0.15, min(h_pct * CH, CY + CH - sy))
+            sx   = CX + x_pct * CW
+            sy   = CY + y_pct * CH
+            sw   = max(0.3,  min(w_pct * CW, CX + CW - sx))
+            el_h = max(0.15, min(h_pct * CH, CY + CH - sy))
 
-            etype   = el.get("type", "text")
-            content = el.get("content", "")
-            style   = el.get("style") or {}
-            color   = resolve_color(style.get("color", el.get("color", "black")))
-            bold    = style.get("bold", el.get("bold", False)) or (etype == "heading")
-            underl  = style.get("underline", False)
+            etype      = el.get("type", "text")
+            content    = el.get("content", "")
+            style      = el.get("style") or {}
+            color      = resolve_color(style.get("color", el.get("color", "black")))
+            bold       = style.get("bold", el.get("bold", False)) or (etype == "heading")
+            underl     = style.get("underline", False)
+            shape_type = el.get("shape", "none")  # rect / ellipse / none
 
             # 高さからフォントサイズを逆算（0.55は行間係数）
-            font_pt = max(8, min(24, int(sh * 72 * 0.55)))
+            font_pt = max(8, min(24, int(el_h * 72 * 0.55)))
 
-            if etype == "heading":
-                txt(s, content, sx, sy, sw, sh,
+            if shape_type in ("rect", "ellipse"):
+                # 図形コンテナにテキストを格納（独立して選択・編集可能）
+                shape_txt(s, shape_type, content, sx, sy, sw, el_h,
+                          size=font_pt, bold=bold, color=color, underline=underl)
+            elif etype == "heading":
+                txt(s, content, sx, sy, sw, el_h,
                     size=min(font_pt + 2, 26), bold=True, color=color, underline=underl)
             elif etype == "arrow":
-                txt(s, f"→ {content}", sx, sy, sw, sh,
+                txt(s, f"→ {content}", sx, sy, sw, el_h,
                     size=font_pt, color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
             else:
-                txt(s, content, sx, sy, sw, sh,
+                txt(s, content, sx, sy, sw, el_h,
                     size=font_pt, bold=bold, color=color, underline=underl)
 
     else:
