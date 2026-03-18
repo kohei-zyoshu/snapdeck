@@ -104,11 +104,12 @@ def get_api_key() -> str:
 
 
 def image_to_base64(uploaded_file) -> tuple[str, str]:
-    """アップロードされた画像をBase64に変換"""
-    ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
+    """アップロードされた画像またはカメラ撮影をBase64に変換"""
+    name = getattr(uploaded_file, "name", "camera.png")
+    ext = name.rsplit(".", 1)[-1].lower()
     media_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
                  "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
-    media_type = media_map.get(ext, "image/jpeg")
+    media_type = media_map.get(ext, "image/png")
     data = base64.standard_b64encode(uploaded_file.read()).decode("utf-8")
     return data, media_type
 
@@ -320,7 +321,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📖 使い方")
     st.markdown("""
-<span class='step-badge'>1</span> 画像をアップロード<br><br>
+<span class='step-badge'>1</span> 写真を選ぶ or カメラ撮影<br><br>
 <span class='step-badge'>2</span> 「変換開始」をクリック<br><br>
 <span class='step-badge'>3</span> ファイルをダウンロード
 """, unsafe_allow_html=True)
@@ -343,14 +344,29 @@ st.markdown("""
 col_upload, col_preview = st.columns([1, 1], gap="large")
 
 with col_upload:
-    st.markdown("### 📸 画像をアップロード")
-    uploaded = st.file_uploader(
-        "ホワイトボードや手書きメモの写真を選択してください",
-        type=["jpg", "jpeg", "png", "webp"],
-        help="JPG / PNG / WebP 対応。最大20MB。"
-    )
+    st.markdown("### 📸 画像を入力")
+    tab_file, tab_cam = st.tabs(["📁 ファイルを選択", "📷 カメラで撮影"])
+
+    with tab_file:
+        uploaded_file = st.file_uploader(
+            "ホワイトボードや手書きメモの写真を選択してください",
+            type=["jpg", "jpeg", "png", "webp"],
+            help="JPG / PNG / WebP 対応。最大20MB。"
+        )
+
+    with tab_cam:
+        st.caption("📱 スマホ・PCのカメラを直接使用できます")
+        camera_photo = st.camera_input(
+            "ホワイトボードをカメラで撮影",
+            help="ブラウザのカメラ許可が必要です（初回のみ確認あり）"
+        )
+
+    # ファイルとカメラどちらか優先（カメラが新しい場合は優先）
+    uploaded = camera_photo or uploaded_file
+
     if uploaded:
-        st.image(uploaded, caption=uploaded.name, use_container_width=True)
+        label = "📷 撮影した画像" if camera_photo and uploaded == camera_photo else uploaded_file.name if uploaded_file else "入力画像"
+        st.image(uploaded, caption=label, use_container_width=True)
 
 with col_preview:
     st.markdown("### 💡 使用例")
