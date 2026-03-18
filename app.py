@@ -21,6 +21,18 @@ st.set_page_config(
 # ─── CSS（高齢者・スマホ ユニバーサルデザイン） ─────────────────────────────
 st.markdown("""
 <style>
+/* ── Streamlit ヘッダー・フッター・各種リンクを非表示 ── */
+header[data-testid="stHeader"] { display: none !important; }
+#MainMenu { display: none !important; }
+footer { display: none !important; }
+[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+/* GitHub・Streamlit ロゴリンク */
+a[href*="github.com"] { display: none !important; }
+a[href*="streamlit.io"] { display: none !important; }
+.viewerBadge_container__r5tak { display: none !important; }
+.stActionButton { display: none !important; }
+
 /* ── 全体背景 ── */
 .stApp { background: #F4F7FA; }
 .main .block-container { padding: 1.4rem 1rem 5rem; max-width: 560px; }
@@ -249,31 +261,31 @@ def fix_orientation(img: Image.Image) -> Image.Image:
 
 
 def deskew_image(img: Image.Image) -> Image.Image:
-    """投影プロファイル法で傾きを検出・補正する"""
+    """投影プロファイル法で傾きを検出・補正する（numpy高速版）"""
     try:
-        gray = np.array(img.convert("L"))
-        # 二値化（文字=0, 背景=255）
-        binary = (gray < 128).astype(np.uint8)
+        # 400px縮小版で角度検出（高速化）
+        thumb = img.copy()
+        thumb.thumbnail((400, 400), Image.LANCZOS)
+        gray   = np.array(thumb.convert("L"), dtype=np.float32)
+        binary = (gray < 128).astype(np.float32)
+        h, w   = binary.shape
+        ys     = np.arange(h, dtype=np.float32)
+        xs     = np.arange(w, dtype=np.float32)
+
         best_angle = 0.0
         best_score = -1.0
-        # -10° ～ +10° の範囲で0.5°刻みに探索
-        for angle in np.arange(-10, 10.5, 0.5):
+        for angle in np.arange(-10, 10.5, 1.0):   # 1°刻みで高速探索
             rad = math.radians(angle)
-            cos_a, sin_a = math.cos(rad), math.sin(rad)
-            h, w = binary.shape
-            # 各行について回転後のy座標にマッピングして水平投影
-            rotated_sum = np.zeros(h + w)
-            for y in range(h):
-                for x in range(w):
-                    if binary[y, x]:
-                        ny = int(y * cos_a - x * sin_a) + w
-                        if 0 <= ny < len(rotated_sum):
-                            rotated_sum[ny] += 1
-            score = float(np.var(rotated_sum))
+            ny  = (ys[:, None] * math.cos(rad)
+                   - xs[None, :] * math.sin(rad))
+            ny_int = np.clip(ny.astype(np.int32) + w, 0, h + w - 1)
+            proj   = np.bincount(ny_int[binary > 0].ravel(), minlength=h + w)
+            score  = float(np.var(proj))
             if score > best_score:
                 best_score = score
                 best_angle = angle
-        if abs(best_angle) > 0.3:
+
+        if abs(best_angle) > 0.5:
             img = img.rotate(-best_angle, expand=True,
                              fillcolor=(255, 255, 255), resample=Image.BICUBIC)
     except Exception:
@@ -510,7 +522,7 @@ def generate_pptx(data: dict) -> bytes:
         r.font.underline = underline
         r.font.italic    = italic
         r.font.color.rgb = color
-        r.font.name      = "Yu Gothic UI" if any(ord(c) > 127 for c in text) else "Arial"
+        r.font.name      = "Noto Sans JP"
 
     def add_table_shape(slide, tbl_data, x, y, max_w, max_h):
         """python-pptxで実際の表を作成"""
@@ -593,10 +605,20 @@ def generate_pptx(data: dict) -> bytes:
         col_right = col_left[mid:]
         col_left  = col_left[:mid]
 
-    def render_column(items, x_start, col_w, y_start=1.25, y_max=6.65):
-        y = y_start
+    # ─ 利用可能な高さから1要素あたりの行高を自動計算 ─
+    Y_START = 1.25
+    Y_MAX   = 6.65
+    AVAIL_H = Y_MAX - Y_START          # 5.4 インチ
+    max_col = max(len(col_left), len(col_right), 1)
+    # 1行あたりの高さ：最小0.28"、最大0.52"
+    step_h  = max(0.28, min(0.52, AVAIL_H / max_col))
+    # フォントサイズをステップ幅から逆算（比例縮小）
+    base_pt = max(8, min(14, int(step_h * 26)))
+
+    def render_column(items, x_start, col_w):
+        y = Y_START
         for el in items:
-            if y >= y_max:
+            if y >= Y_MAX:
                 break
             etype   = el.get("type", "text")
             content = el.get("content", "")
@@ -605,27 +627,25 @@ def generate_pptx(data: dict) -> bytes:
             bold    = style.get("bold", False) or (etype == "heading")
             underl  = style.get("underline", False)
             circled = style.get("circled", False)
-            size    = pt_size(style.get("size", "medium"))
+            # スタイル指定のサイズをベースptに対して相対調整
+            size_map = {"large": base_pt + 2, "medium": base_pt, "small": base_pt - 2}
+            size = size_map.get(style.get("size", "medium"), base_pt)
+            row_h = step_h
 
             if etype == "heading":
-                size = max(size, 15)
-                if y > y_start:
-                    y += 0.06
+                size = min(size + 2, base_pt + 3)
                 label = f"【{content}】" if circled else content
-                txt(s, label, x_start, y, col_w, 0.48,
+                txt(s, label, x_start, y, col_w, row_h,
                     size=size, bold=True, color=color, underline=underl)
-                y += 0.52
             elif etype == "arrow":
-                txt(s, f"→ {content}", x_start + 0.1, y, col_w - 0.1, 0.38,
-                    size=size - 1, bold=False, color=RGBColor(0xFF, 0xB7, 0x4D),
-                    italic=True)
-                y += 0.42
+                txt(s, f"→ {content}", x_start + 0.1, y, col_w - 0.1, row_h,
+                    size=max(size - 1, 8), color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
             else:
                 prefix = "○ " if circled else "• "
-                label  = f"{prefix}{content}"
-                txt(s, label, x_start + 0.1, y, col_w - 0.1, 0.40,
+                txt(s, f"{prefix}{content}", x_start + 0.1, y, col_w - 0.1, row_h,
                     size=size, bold=bold, color=color, underline=underl)
-                y += 0.44
+
+            y += row_h
 
     render_column(col_left,  0.45, 6.0)
     render_column(col_right, 6.75, 6.0)
