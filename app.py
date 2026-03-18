@@ -459,11 +459,9 @@ def get_demo_data() -> dict:
 def generate_pptx(data: dict) -> bytes:
     """解析データからパワーポイントを生成（色・スタイル・表・ゾーン配置対応）"""
     from pptx import Presentation
-    from pptx.util import Inches, Pt, Emu
+    from pptx.util import Inches, Pt
     from pptx.dml.color import RGBColor
     from pptx.enum.text import PP_ALIGN
-    from pptx.oxml.ns import qn
-    from lxml import etree
 
     # ─ カラーパレット（スライド背景用） ─
     C_DARK   = RGBColor(0x0D, 0x1B, 0x2A)
