@@ -1,120 +1,156 @@
 """
-SnapDeck Web App — Streamlit Cloud対応版
-ホワイトボード・手書きメモ → PowerPoint / JSON 自動変換
+SnapDeck — スマホ対応・シンプル版
+ホワイトボード・手書きメモ → スライド自動変換
 """
 
-import os
-import io
-import json
-import base64
-import re
-import zipfile
+import os, io, json, base64, re, zipfile
 from datetime import datetime
 
 import streamlit as st
+from PIL import Image, ImageChops
 
 # ─── ページ設定 ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="SnapDeck",
     page_icon="📸",
-    layout="wide",
-    initial_sidebar_state="expanded",
+    layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
-# ─── カスタムCSS ───────────────────────────────────────────────────────────────
+# ─── CSS（スマホ・高齢者向け） ─────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* 全体背景 */
-    .stApp { background-color: #0D1B2A; }
-    .main .block-container { padding-top: 2rem; }
+/* 背景 */
+.stApp { background: #F2F5F8; }
+.main .block-container { padding: 1.2rem 1rem 4rem; max-width: 540px; }
 
-    /* サイドバー */
-    section[data-testid="stSidebar"] { background-color: #1B2838; }
+/* タイトル */
+.logo { text-align:center; font-size:2.6rem; font-weight:900;
+        color:#0D1B2A; margin-bottom:0.1rem; line-height:1.2; }
+.logo em { color:#0099BB; font-style:normal; }
+.tagline { text-align:center; color:#607D8B; font-size:1.1rem; margin-bottom:1.8rem; }
 
-    /* タイトル */
-    .snap-title {
-        font-size: 2.8rem; font-weight: 900;
-        color: #FFFFFF; line-height: 1.1; margin-bottom: 0;
-    }
-    .snap-accent { color: #00B4D8; }
-    .snap-subtitle {
-        font-size: 1.05rem; color: #94A3B8; margin-top: 0.3rem; margin-bottom: 1.5rem;
-    }
+/* ステップラベル */
+.step { display:flex; align-items:center; gap:0.6rem;
+        font-size:1.3rem; font-weight:700; color:#0D1B2A;
+        margin: 1.6rem 0 0.5rem; }
+.snum { background:#0099BB; color:#fff; border-radius:50%;
+        width:34px; height:34px; line-height:34px;
+        text-align:center; font-size:1rem; font-weight:900; flex-shrink:0; }
 
-    /* カード */
-    .snap-card {
-        background: #1B2838; border-radius: 10px;
-        padding: 1.2rem 1.4rem; margin-bottom: 1rem;
-        border: 1px solid #2D3F55;
-    }
-    .snap-card h4 { color: #00B4D8; margin: 0 0 0.4rem 0; font-size: 1rem; }
-    .snap-card p  { color: #CBD5E1; margin: 0; font-size: 0.9rem; line-height: 1.5; }
+/* ヒントテキスト */
+.hint { color:#5A7080; font-size:1.05rem; margin:0 0 0.8rem; line-height:1.6; }
 
-    /* ステップバッジ */
-    .step-badge {
-        display: inline-block; background: #00B4D8;
-        color: #0D1B2A; border-radius: 50%;
-        width: 28px; height: 28px; line-height: 28px;
-        text-align: center; font-weight: 900; font-size: 0.9rem;
-        margin-right: 8px;
-    }
+/* ボタン全般（大きく） */
+.stButton > button {
+    font-size: 1.25rem !important;
+    min-height: 64px !important;
+    border-radius: 14px !important;
+    font-weight: 700 !important;
+    width: 100% !important;
+    letter-spacing: 0.02em !important;
+}
+.stButton > button[kind="primary"] {
+    background: #0099BB !important;
+    color: white !important;
+    border: none !important;
+    box-shadow: 0 4px 12px rgba(0,153,187,0.3) !important;
+}
+.stButton > button[kind="secondary"] {
+    background: #E8F0F5 !important;
+    color: #334155 !important;
+    border: 1px solid #CBD5E0 !important;
+}
+.stButton > button:disabled {
+    opacity: 0.45 !important;
+}
 
-    /* 結果ボックス */
-    .result-box {
-        background: #1E3448; border-left: 4px solid #00B4D8;
-        border-radius: 6px; padding: 1rem 1.2rem; margin: 0.5rem 0;
-    }
-    .result-box .label { color: #94A3B8; font-size: 0.8rem; text-transform: uppercase; }
-    .result-box .value { color: #FFFFFF; font-size: 1.05rem; font-weight: 600; }
+/* ダウンロードボタン */
+.stDownloadButton > button {
+    background: #10B981 !important;
+    color: white !important;
+    font-size: 1.25rem !important;
+    min-height: 64px !important;
+    border-radius: 14px !important;
+    font-weight: 700 !important;
+    width: 100% !important;
+    border: none !important;
+    box-shadow: 0 4px 12px rgba(16,185,129,0.3) !important;
+    letter-spacing: 0.02em !important;
+}
 
-    /* ダウンロードボタン上書き */
-    .stDownloadButton button {
-        background-color: #00B4D8 !important; color: #0D1B2A !important;
-        font-weight: 700 !important; border: none !important;
-        border-radius: 8px !important; width: 100%;
-    }
-    .stDownloadButton button:hover { background-color: #0094B3 !important; }
+/* 完了ボックス */
+.done-box {
+    background: #D1FAE5; border: 2px solid #10B981;
+    border-radius: 14px; padding: 1.3rem 1.4rem;
+    font-size: 1.15rem; color: #065F46; font-weight: 600;
+    margin: 1rem 0; line-height: 1.7;
+}
 
-    /* ファイルアップローダー */
-    .stFileUploader { border-radius: 10px; }
+/* タブ */
+.stTabs [data-baseweb="tab"] {
+    font-size: 1.1rem !important;
+    font-weight: 600 !important;
+    min-height: 52px !important;
+}
 
-    /* 成功メッセージ */
-    .stSuccess { background-color: #1E3448 !important; color: #10B981 !important; }
+/* ファイルアップローダー */
+[data-testid="stFileUploaderDropzone"] {
+    min-height: 130px;
+    border-radius: 12px !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] p {
+    font-size: 1rem !important;
+}
 
-    /* コードブロック */
-    .stCode { background-color: #1B2838 !important; }
+/* トグル */
+.stToggle label { font-size: 1.05rem !important; font-weight: 600 !important; }
+
+/* expander */
+.stExpander summary p { font-size: 1.05rem !important; }
+
+/* divider */
+hr { margin: 1.2rem 0 !important; border-color: #D1D9E0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ─── ユーティリティ ────────────────────────────────────────────────────────────
+
+# ─── バックエンド関数 ──────────────────────────────────────────────────────────
 
 def get_api_key() -> str:
     """APIキーをSecretsまたはサイドバーから取得"""
-    # Streamlit Secretsから取得（デプロイ時）
     try:
         return st.secrets["ANTHROPIC_API_KEY"]
     except Exception:
         pass
-    # 環境変数から取得
     env_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if env_key:
         return env_key
-    # サイドバー入力から取得
     return st.session_state.get("api_key_input", "")
 
 
-def image_to_base64(uploaded_file) -> tuple[str, str]:
-    """アップロードされた画像またはカメラ撮影をBase64に変換"""
-    name = getattr(uploaded_file, "name", "camera.png")
-    ext = name.rsplit(".", 1)[-1].lower()
-    media_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
-                 "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
-    media_type = media_map.get(ext, "image/png")
-    data = base64.standard_b64encode(uploaded_file.read()).decode("utf-8")
-    return data, media_type
+def auto_trim(img: Image.Image, margin: int = 30) -> Image.Image:
+    """白い余白を自動でカット（精度向上）"""
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    bg   = Image.new("RGB", img.size, (255, 255, 255))
+    diff = ImageChops.difference(img, bg)
+    bbox = diff.getbbox()
+    if not bbox:
+        return img
+    left   = max(0,          bbox[0] - margin)
+    top    = max(0,          bbox[1] - margin)
+    right  = min(img.width,  bbox[2] + margin)
+    bottom = min(img.height, bbox[3] + margin)
+    return img.crop((left, top, right, bottom))
 
 
-# ─── AI解析 ────────────────────────────────────────────────────────────────────
+def pil_to_base64(img: Image.Image) -> tuple[str, str]:
+    """PIL Image → base64"""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.standard_b64encode(buf.getvalue()).decode("utf-8"), "image/png"
+
 
 EXTRACTION_PROMPT = """
 あなたは画像解析の専門家です。与えられた画像（ホワイトボードや手書きメモ）を分析し、
@@ -155,22 +191,18 @@ EXTRACTION_PROMPT = """
 def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
     """Claude Vision APIで画像を解析（結果をキャッシュ）"""
     import anthropic
-
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model="claude-opus-4-6",
         max_tokens=4096,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {
-                    "type": "base64", "media_type": media_type, "data": img_data
-                }},
-                {"type": "text", "text": EXTRACTION_PROMPT}
-            ]
-        }]
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {
+                "type": "base64", "media_type": media_type, "data": img_data
+            }},
+            {"type": "text", "text": EXTRACTION_PROMPT}
+        ]}]
     )
-    text = message.content[0].text.strip()
+    text  = message.content[0].text.strip()
     match = re.search(r'\{.*\}', text, re.DOTALL)
     return json.loads(match.group() if match else text)
 
@@ -179,16 +211,16 @@ def get_demo_data() -> dict:
     return {
         "title": "新サービス企画 ブレインストーミング",
         "elements": [
-            {"id": "el_001", "type": "heading", "content": "ターゲットユーザー", "level": 1, "confidence": 0.97},
+            {"id": "el_001", "type": "heading", "content": "ターゲットユーザー",             "level": 1, "confidence": 0.97},
             {"id": "el_002", "type": "bullet",  "content": "20〜40代ビジネスパーソン",        "level": 2, "confidence": 0.95},
             {"id": "el_003", "type": "bullet",  "content": "会議が多い職種（営業・企画・PM）", "level": 2, "confidence": 0.93},
-            {"id": "el_004", "type": "heading", "content": "コア機能",                          "level": 1, "confidence": 0.98},
+            {"id": "el_004", "type": "heading", "content": "コア機能",                         "level": 1, "confidence": 0.98},
             {"id": "el_005", "type": "bullet",  "content": "写真1枚でスライド自動生成",        "level": 2, "confidence": 0.97},
-            {"id": "el_006", "type": "bullet",  "content": "多言語OCR対応",                    "level": 2, "confidence": 0.94},
-            {"id": "el_007", "type": "bullet",  "content": "PPTX / JSON / Figma 出力",          "level": 2, "confidence": 0.96},
-            {"id": "el_008", "type": "heading", "content": "マネタイズ案",                     "level": 1, "confidence": 0.95},
-            {"id": "el_009", "type": "bullet",  "content": "フリーミアム（月10枚無料）",       "level": 2, "confidence": 0.93},
-            {"id": "el_010", "type": "bullet",  "content": "Pro: ¥1,980/月",                   "level": 2, "confidence": 0.91},
+            {"id": "el_006", "type": "bullet",  "content": "多言語OCR対応",                   "level": 2, "confidence": 0.94},
+            {"id": "el_007", "type": "bullet",  "content": "PPTX / JSON 出力",                "level": 2, "confidence": 0.96},
+            {"id": "el_008", "type": "heading", "content": "マネタイズ案",                    "level": 1, "confidence": 0.95},
+            {"id": "el_009", "type": "bullet",  "content": "フリーミアム（月10枚無料）",      "level": 2, "confidence": 0.93},
+            {"id": "el_010", "type": "bullet",  "content": "Pro: ¥1,980/月",                  "level": 2, "confidence": 0.91},
         ],
         "structure": {
             "type": "list",
@@ -199,14 +231,12 @@ def get_demo_data() -> dict:
             ]
         },
         "language": "ja",
-        "notes": "これはデモデータです。APIキーを設定すると実際の画像を解析できます。"
+        "notes": "これはサンプルデータです。実際の画像を使うと本物の解析結果が得られます。"
     }
 
 
-# ─── PPTX生成 ──────────────────────────────────────────────────────────────────
-
 def generate_pptx(data: dict) -> bytes:
-    """解析データからPowerPointを生成してbytesで返す"""
+    """解析データからPowerPointを生成"""
     from pptx import Presentation
     from pptx.util import Inches, Pt
     from pptx.dml.color import RGBColor
@@ -245,19 +275,19 @@ def generate_pptx(data: dict) -> bytes:
         r.font.size = Pt(size); r.font.bold = bold
         r.font.color.rgb = color; r.font.name = "Arial"
 
-    # ── タイトルスライド ──
+    # タイトルスライド
     s = prs.slides.add_slide(blank)
     bg(s, C_DARK)
     rect(s, 0, 0, 0.08, 7.5, C_ACCENT)
     title = data.get("title", "ホワイトボードメモ")
-    txt(s, title,                 0.3, 1.2, 12.7, 1.6, size=40, bold=True)
+    txt(s, title,                      0.3, 1.2, 12.7, 1.6, size=40, bold=True)
     txt(s, "SnapDeck 自動変換レポート", 0.3, 2.9,  8.0, 0.6, size=18, color=C_ACCENT)
     ts = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-    txt(s, f"変換日時: {ts}",     0.3, 3.6,  8.0, 0.5, size=13, color=C_MUTED)
+    txt(s, f"変換日時: {ts}",           0.3, 3.6,  8.0, 0.5, size=13, color=C_MUTED)
     if data.get("notes"):
-        txt(s, f"📝 {data['notes']}", 0.3, 6.7, 12.7, 0.55, size=11, color=C_MUTED)
+        txt(s, f"📝 {data['notes']}",   0.3, 6.7, 12.7, 0.55, size=11, color=C_MUTED)
 
-    # ── グループ別スライド ──
+    # グループ別スライド
     elements_by_id = {el["id"]: el for el in data.get("elements", [])}
     groups = data.get("structure", {}).get("groups", [])
     if not groups:
@@ -269,23 +299,18 @@ def generate_pptx(data: dict) -> bytes:
         rect(s, 0, 0, 13.33, 0.08, C_ACCENT)
         txt(s, group.get("label", "内容"), 0.4, 0.18, 12.5, 0.72, size=28, bold=True)
         rect(s, 0.3, 1.0, 12.73, 6.1, C_NAVY)
-
         y = 1.15
         for item_id in group.get("items", []):
             el = elements_by_id.get(item_id)
             if not el: continue
-            content  = el.get("content", "")
-            el_type  = el.get("type", "text")
-
-            if el_type == "heading":
+            if el.get("type") == "heading":
                 if y > 1.15: y += 0.08
-                txt(s, content, 0.55, y, 12.2, 0.52, size=18, bold=True, color=C_ACCENT)
+                txt(s, el["content"], 0.55, y, 12.2, 0.52, size=18, bold=True, color=C_ACCENT)
                 y += 0.6
             else:
-                txt(s, "  •  " + content, 0.55, y, 12.1, 0.45, size=14, color=C_LIGHT)
+                txt(s, "  •  " + el["content"], 0.55, y, 12.1, 0.45, size=14, color=C_LIGHT)
                 y += 0.48
             if y > 6.7: break
-
         rect(s, 0, 7.15, 13.33, 0.35, C_NAVY)
         txt(s, "SnapDeck  |  自動生成", 0.4, 7.15, 12.9, 0.35,
             size=10, color=C_MUTED, align=PP_ALIGN.RIGHT)
@@ -297,219 +322,202 @@ def generate_pptx(data: dict) -> bytes:
 
 # ─── UI ────────────────────────────────────────────────────────────────────────
 
-# サイドバー
-with st.sidebar:
-    st.markdown("## ⚙️ 設定")
-    st.markdown("---")
-    api_key_input = st.text_input(
-        "🔑 Anthropic API キー",
-        type="password",
-        placeholder="sk-ant-api03-...",
-        help="https://console.anthropic.com でAPIキーを取得できます"
-    )
-    if api_key_input:
-        st.session_state["api_key_input"] = api_key_input
-        st.success("✅ APIキーが設定されました")
-    else:
-        st.info("APIキー未設定のためデモモードで動作します")
-
-    st.markdown("---")
-    st.markdown("### 📤 出力設定")
-    output_pptx = st.checkbox("PowerPoint (.pptx)", value=True)
-    output_json = st.checkbox("JSON データ",        value=True)
-
-    st.markdown("---")
-    st.markdown("### 📖 使い方")
-    st.markdown("""
-<span class='step-badge'>1</span> 写真を選ぶ or カメラ撮影<br><br>
-<span class='step-badge'>2</span> 「変換開始」をクリック<br><br>
-<span class='step-badge'>3</span> ファイルをダウンロード
+# タイトル
+st.markdown("""
+<div class='logo'>Snap<em>Deck</em></div>
+<div class='tagline'>ホワイトボードの写真を、すぐにスライドへ</div>
 """, unsafe_allow_html=True)
+
+# APIキー — Secretsになければサイドバーに入力欄を表示
+if not get_api_key():
+    with st.sidebar:
+        st.markdown("### 🔑 APIキー設定")
+        key_in = st.text_input("Anthropic APIキー", type="password",
+                               placeholder="sk-ant-api03-...")
+        if key_in:
+            st.session_state["api_key_input"] = key_in
+            st.success("✅ 設定しました")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# STEP 1 ── 写真を撮る・選ぶ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+st.markdown(
+    "<div class='step'><span class='snum'>1</span>写真を撮る・選ぶ</div>",
+    unsafe_allow_html=True)
+st.markdown(
+    "<p class='hint'>ホワイトボードや手書きメモを、できるだけ正面から撮影してください。</p>",
+    unsafe_allow_html=True)
+
+tab_cam, tab_file = st.tabs(["📷　カメラで撮影", "📁　ファイルを選択"])
+
+with tab_cam:
+    camera_photo = st.camera_input(
+        "カメラを起動",
+        help="ブラウザのカメラ許可が必要です（初回のみポップアップが表示されます）",
+        label_visibility="collapsed",
+    )
+
+with tab_file:
+    uploaded_file = st.file_uploader(
+        "画像ファイルを選択",
+        type=["jpg", "jpeg", "png", "webp"],
+        label_visibility="collapsed",
+        help="JPG・PNG・WebP に対応しています",
+    )
+
+# カメラ優先で統合
+raw_input = camera_photo or uploaded_file
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 画像プレビュー ＆ 余白カット
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+pil_image = None
+img_data  = None
+media_type = "image/png"
+
+if raw_input:
+    pil_image = Image.open(raw_input)
+    if pil_image.mode not in ("RGB",):
+        pil_image = pil_image.convert("RGB")
+
+    st.markdown("---")
+
+    do_trim = st.toggle(
+        "✂️  余白を自動でカットする（文字の精度が上がります）",
+        value=True,
+        help="写真の周囲にある白い余白や不要な部分を自動で除去します。",
+    )
+
+    display_img = auto_trim(pil_image) if do_trim else pil_image
+    st.image(display_img, caption="変換する画像", use_container_width=True)
+
+    # base64 に変換（変換ボタン押下時に使用）
+    img_data, media_type = pil_to_base64(display_img)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# STEP 2 ── 変換する
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+st.markdown("---")
+st.markdown(
+    "<div class='step'><span class='snum'>2</span>スライドに変換する</div>",
+    unsafe_allow_html=True)
+
+can_convert = bool(raw_input)
+convert_btn = st.button(
+    "🚀　変換する",
+    type="primary",
+    use_container_width=True,
+    disabled=not can_convert,
+    help="写真を撮影またはファイルを選択してから押してください" if not can_convert else "",
+)
+
+if not can_convert:
+    st.markdown(
+        "<p style='text-align:center;color:#9CA3AF;font-size:0.95rem;margin-top:0.3rem;'>"
+        "↑ まず写真を撮ってから押してください</p>",
+        unsafe_allow_html=True)
+
+st.markdown(
+    "<p style='text-align:center;color:#9CA3AF;font-size:1rem;margin:0.8rem 0;'>または</p>",
+    unsafe_allow_html=True)
+
+demo_btn = st.button(
+    "🎯　サンプルで試してみる（写真なしでOK）",
+    use_container_width=True,
+)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 変換処理
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if demo_btn:
+    st.session_state["extracted"]  = get_demo_data()
+    st.session_state["pptx_bytes"] = generate_pptx(get_demo_data())
+    st.session_state["is_demo"]    = True
+    st.rerun()
+
+if convert_btn and img_data:
+    st.session_state["is_demo"] = False
+    with st.spinner("🤖 AIが文字を読み取っています… （10〜20秒かかります）"):
+        try:
+            api_key = get_api_key()
+            if api_key:
+                extracted = analyze_with_claude(img_data, media_type, api_key)
+            else:
+                st.warning("⚠️ APIキーが見つかりません。左上のメニューから設定してください。")
+                extracted = get_demo_data()
+            st.session_state["extracted"]  = extracted
+            st.session_state["pptx_bytes"] = generate_pptx(extracted)
+        except Exception as e:
+            st.error(f"❌ エラーが発生しました: {e}")
+            st.info("もう一度お試しいただくか、「サンプルで試してみる」をご利用ください。")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# STEP 3 ── ダウンロード
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if "extracted" in st.session_state:
+    extracted  = st.session_state["extracted"]
+    pptx_bytes = st.session_state.get("pptx_bytes")
+    is_demo    = st.session_state.get("is_demo", False)
 
     st.markdown("---")
     st.markdown(
-        "<div style='color:#94A3B8;font-size:0.78rem;'>Powered by Claude Vision API<br>"
-        "© 2026 SnapDeck</div>",
-        unsafe_allow_html=True
-    )
+        "<div class='step'><span class='snum'>3</span>スライドをダウンロード</div>",
+        unsafe_allow_html=True)
 
-# ─── メインエリア ──────────────────────────────────────────────────────────────
-st.markdown("""
-<div>
-  <span class='snap-title'>Snap</span><span class='snap-title snap-accent'>Deck</span>
-  <p class='snap-subtitle'>ホワイトボード・手書きメモを、瞬時にスライドへ</p>
+    el_count  = len(extracted.get("elements", []))
+    grp_count = len(extracted.get("structure", {}).get("groups", []))
+    demo_note = "（サンプルデータ）" if is_demo else ""
+
+    st.markdown(f"""
+<div class='done-box'>
+✅ 変換完了{demo_note}<br>
+検出した項目：<strong>{el_count} 件</strong>　グループ：<strong>{grp_count} 件</strong>
 </div>
 """, unsafe_allow_html=True)
 
-col_upload, col_preview = st.columns([1, 1], gap="large")
-
-with col_upload:
-    st.markdown("### 📸 画像を入力")
-    tab_file, tab_cam = st.tabs(["📁 ファイルを選択", "📷 カメラで撮影"])
-
-    with tab_file:
-        uploaded_file = st.file_uploader(
-            "ホワイトボードや手書きメモの写真を選択してください",
-            type=["jpg", "jpeg", "png", "webp"],
-            help="JPG / PNG / WebP 対応。最大20MB。"
-        )
-
-    with tab_cam:
-        st.caption("📱 スマホ・PCのカメラを直接使用できます")
-        camera_photo = st.camera_input(
-            "ホワイトボードをカメラで撮影",
-            help="ブラウザのカメラ許可が必要です（初回のみ確認あり）"
-        )
-
-    # ファイルとカメラどちらか優先（カメラが新しい場合は優先）
-    uploaded = camera_photo or uploaded_file
-
-    if uploaded:
-        label = "📷 撮影した画像" if camera_photo and uploaded == camera_photo else uploaded_file.name if uploaded_file else "入力画像"
-        st.image(uploaded, caption=label, use_container_width=True)
-
-with col_preview:
-    st.markdown("### 💡 使用例")
-    st.markdown("""
-<div class='snap-card'><h4>📋 対応コンテンツ</h4><p>
-・ホワイトボードの板書<br>
-・付箋・フリップチャート<br>
-・手書きノート・メモ<br>
-・ラフスケッチ・フローチャート
-</p></div>
-
-<div class='snap-card'><h4>✨ 変換できるもの</h4><p>
-・テキスト（日本語・英語対応）<br>
-・箇条書き・番号リスト<br>
-・見出し・グループ構造<br>
-・表・フロー（Phase 2〜）
-</p></div>
-""", unsafe_allow_html=True)
-
-st.markdown("---")
-
-# ─── 変換処理 ──────────────────────────────────────────────────────────────────
-
-convert_btn = st.button(
-    "🚀　変換開始",
-    type="primary",
-    use_container_width=True,
-    disabled=(not uploaded and get_api_key() == "")
-)
-
-if st.button("🎯　デモモードで試す（画像不要）", use_container_width=True):
-    st.session_state["force_demo"] = True
-    st.session_state["extracted"] = get_demo_data()
-    st.session_state["pptx_bytes"] = generate_pptx(get_demo_data()) if output_pptx else None
-    st.session_state["json_str"]   = json.dumps(get_demo_data(), ensure_ascii=False, indent=2)
-    st.rerun()
-
-if convert_btn or st.session_state.get("force_demo"):
-    st.session_state.pop("force_demo", None)
-    api_key = get_api_key()
-
-    with st.spinner("🤖 AIが解析中...（10〜20秒かかる場合があります）"):
-        try:
-            if uploaded and api_key:
-                img_data, media_type = image_to_base64(uploaded)
-                extracted = analyze_with_claude(img_data, media_type, api_key)
-            elif uploaded and not api_key:
-                st.warning("⚠️ APIキーが未設定のため、デモデータを表示します。サイドバーからAPIキーを入力してください。")
-                extracted = get_demo_data()
-            else:
-                extracted = get_demo_data()
-
-            st.session_state["extracted"]  = extracted
-            st.session_state["pptx_bytes"] = generate_pptx(extracted) if output_pptx else None
-            st.session_state["json_str"]   = json.dumps(
-                {"snapdeck_version": "1.0", "exported_at": datetime.now().isoformat(), "data": extracted},
-                ensure_ascii=False, indent=2
-            ) if output_json else None
-
-        except Exception as e:
-            st.error(f"❌ エラーが発生しました: {e}")
-            st.info("APIキーを確認するか、デモモードをお試しください。")
-
-# ─── 結果表示 ──────────────────────────────────────────────────────────────────
-
-if "extracted" in st.session_state:
-    extracted = st.session_state["extracted"]
-    st.success("✅ 変換完了！ファイルをダウンロードしてください。")
-
-    # 統計
-    el_count  = len(extracted.get("elements", []))
-    grp_count = len(extracted.get("structure", {}).get("groups", []))
-    lang      = extracted.get("language", "—")
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(f"""<div class='result-box'>
-            <div class='label'>検出要素数</div>
-            <div class='value'>{el_count} 個</div></div>""", unsafe_allow_html=True)
-    with c2:
-        st.markdown(f"""<div class='result-box'>
-            <div class='label'>グループ数</div>
-            <div class='value'>{grp_count} 件</div></div>""", unsafe_allow_html=True)
-    with c3:
-        st.markdown(f"""<div class='result-box'>
-            <div class='label'>検出言語</div>
-            <div class='value'>{"日本語" if lang=="ja" else "英語" if lang=="en" else lang}</div></div>""",
-            unsafe_allow_html=True)
-
-    st.markdown(f"**タイトル（推定）：** {extracted.get('title', '—')}")
-    if extracted.get("notes"):
-        st.caption(f"📝 {extracted['notes']}")
-
-    # ダウンロード
-    st.markdown("### 📥 ダウンロード")
-    dl1, dl2, dl3 = st.columns(3)
-
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    with dl1:
-        if st.session_state.get("pptx_bytes"):
-            st.download_button(
-                label="📊 PowerPoint をダウンロード",
-                data=st.session_state["pptx_bytes"],
-                file_name=f"snapdeck_{ts}.pptx",
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            )
+    if pptx_bytes:
+        st.download_button(
+            label="⬇️　PowerPoint をダウンロード",
+            data=pptx_bytes,
+            file_name=f"snapdeck_{ts}.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            use_container_width=True,
+        )
 
-    with dl2:
-        if st.session_state.get("json_str"):
-            st.download_button(
-                label="📋 JSON をダウンロード",
-                data=st.session_state["json_str"],
-                file_name=f"snapdeck_{ts}.json",
-                mime="application/json",
-            )
-
-    with dl3:
-        # ZIPで両方まとめてダウンロード
-        if st.session_state.get("pptx_bytes") and st.session_state.get("json_str"):
-            zip_buf = io.BytesIO()
-            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr(f"snapdeck_{ts}.pptx", st.session_state["pptx_bytes"])
-                zf.writestr(f"snapdeck_{ts}.json",  st.session_state["json_str"].encode("utf-8"))
-            st.download_button(
-                label="📦 まとめてダウンロード (ZIP)",
-                data=zip_buf.getvalue(),
-                file_name=f"snapdeck_{ts}.zip",
-                mime="application/zip",
-            )
-
-    # 抽出内容プレビュー
-    with st.expander("🔍 抽出内容の詳細を確認する"):
+    # JSON／詳細は折りたたみで提供
+    with st.expander("📋 テキストデータ・詳細を見る"):
+        json_str = json.dumps(
+            {"snapdeck_version": "1.0",
+             "exported_at": datetime.now().isoformat(),
+             "data": extracted},
+            ensure_ascii=False, indent=2
+        )
+        st.download_button(
+            label="⬇️　JSON をダウンロード",
+            data=json_str,
+            file_name=f"snapdeck_{ts}.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+        st.markdown("---")
+        elmap = {el["id"]: el for el in extracted.get("elements", [])}
         for group in extracted.get("structure", {}).get("groups", []):
             st.markdown(f"**{group.get('label', 'グループ')}**")
-            elements_by_id = {el["id"]: el for el in extracted.get("elements", [])}
-            for item_id in group.get("items", []):
-                el = elements_by_id.get(item_id)
+            for iid in group.get("items", []):
+                el = elmap.get(iid)
                 if el:
+                    icon = "📌" if el.get("type") == "heading" else "・"
                     conf = el.get("confidence", 1.0)
-                    icon = "📌" if el.get("type") == "heading" else "•"
                     st.markdown(
                         f"&nbsp;&nbsp;{icon} {el['content']} "
-                        f"<span style='color:#94A3B8;font-size:0.8rem;'>({conf*100:.0f}%)</span>",
-                        unsafe_allow_html=True
-                    )
+                        f"<span style='color:#9CA3AF;font-size:0.85rem;'>（確度 {conf*100:.0f}%）</span>",
+                        unsafe_allow_html=True)
+
+# フッター
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(
+    "<div style='text-align:center;color:#9CA3AF;font-size:0.85rem;'>"
+    "Powered by Claude Vision API &nbsp;|&nbsp; © 2026 SnapDeck</div>",
+    unsafe_allow_html=True)
