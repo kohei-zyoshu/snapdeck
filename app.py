@@ -458,18 +458,35 @@ def build_split_view_html(preview_bytes: bytes, data: dict) -> str:
     # ── テキスト行スナップ ──
     text_lines = detect_text_rows(img_pil)
 
-    chips = ""
+    # ── y_pct を計算してソート ──
+    entries: list[tuple[float, int, dict]] = []
     for idx, item in enumerate(all_items):
-        yp   = item.get("y_pct")
+        yp = item.get("y_pct")
         if yp is None:
             yp = int(100 * (idx + 0.5) / max(total, 1))
-        yp   = snap_y_to_line(yp, img_h, text_lines)
+        yp = snap_y_to_line(yp, img_h, text_lines)
+        entries.append((float(yp), idx, item))
+    entries.sort(key=lambda e: e[0])
+
+    # ── 最小間隔を強制（チップ高さ ≈ 26px を % に換算）──
+    CHIP_H_PX   = 26
+    min_gap_pct = max(3.5, round(CHIP_H_PX / img_h * 100, 1))
+    last_yp = -min_gap_pct
+    adjusted: list[tuple[float, int, dict]] = []
+    for yp, idx, item in entries:
+        yp = max(yp, last_yp + min_gap_pct)
+        yp = min(yp, 100.0)
+        last_yp = yp
+        adjusted.append((yp, idx, item))
+
+    chips = ""
+    for yp, idx, item in adjusted:
         text = item.get("text", "")
         disp = (text[:28] + "…") if len(text) > 28 else text
         chex = item_color_hex(idx)
 
         chips += (
-            f"<div style='position:absolute; top:calc({yp}% - 13px);"
+            f"<div style='position:absolute; top:calc({yp:.1f}% - 13px);"
             f" left:0; right:0; padding:0 4px;'>"
             f"<div style='background:{chex}18; border:1.5px solid {chex};"
             f" border-radius:6px; padding:2px 9px; font-size:0.78rem;"
