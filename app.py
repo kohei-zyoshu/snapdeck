@@ -2,7 +2,7 @@
 パシャッと — 手書きメモ・ホワイトボード → スライド自動変換
 """
 
-import os, io, json, base64, re
+import os, io, json, base64, re, copy
 from datetime import datetime
 
 import streamlit as st
@@ -921,16 +921,19 @@ if uploaded_file:
             proc_bytes, do_trim, do_shadow
         )
 
-        # ファイルが変わったら前の変換結果をリセット
+        # ファイルが変わったら前の変換結果・編集内容をリセット
         if st.session_state.get("_file_id") != file_id:
             for k in ("extracted", "pptx_bytes", "html_bytes"):
                 st.session_state.pop(k, None)
+            for k in [k for k in st.session_state if k.startswith("edit_")]:
+                del st.session_state[k]
             st.session_state["_file_id"] = file_id
 
         # session_state に保持（リラン後もボタン押下で参照できるよう）
-        st.session_state["_img_data"]    = img_data
-        st.session_state["_media_type"]  = media_type
-        st.session_state["_is_portrait"] = is_portrait
+        st.session_state["_img_data"]       = img_data
+        st.session_state["_media_type"]     = media_type
+        st.session_state["_is_portrait"]    = is_portrait
+        st.session_state["_preview_bytes"]  = preview_bytes
 
         orient_label = "縦（ポートレート）" if is_portrait else "横（ランドスケープ）"
         cap_label    = "変換するページ" if is_pdf else "変換する写真"
@@ -996,6 +999,9 @@ if convert_btn and img_data:
         st.session_state["extracted"]   = extracted
         st.session_state["pptx_bytes"]  = generate_pptx(extracted, is_portrait=is_portrait)
         st.session_state["html_bytes"]  = generate_html(extracted)
+        # 新規変換時は編集キーをクリア（前回の編集内容を引き継がせない）
+        for k in [k for k in st.session_state if k.startswith("edit_")]:
+            del st.session_state[k]
 
         progress.progress(100)
         status.markdown("**完了しました。下にスクロールして保存してください。**")
@@ -1032,30 +1038,92 @@ if "extracted" in st.session_state:
         f"<div class='done-box'>完了 — 読み取り：<strong>{el_count} 件</strong></div>",
         unsafe_allow_html=True)
 
-    # ── 読み取り結果をリストで表示 ──
-    if elements:
-        sorted_els = sorted(elements,
-                            key=lambda e: (float(e.get("y", 0)), float(e.get("x", 0))))
-        TYPE_PFX   = {"heading": "■ ", "bullet": "・", "arrow": "→ ", "text": ""}
-        SHAPE_PFX  = {"rect": "[四] ", "ellipse": "(丸) "}
-        rows_html  = ""
-        for el in sorted_els:
-            etype   = el.get("type", "text")
-            content = el.get("content", "")
-            shape   = el.get("shape", "none")
-            prefix  = SHAPE_PFX.get(shape, TYPE_PFX.get(etype, ""))
-            fw      = "700" if etype == "heading" else "400"
-            rows_html += (
-                f"<div style='padding:0.35rem 0.55rem; border-bottom:1px solid #EDE9FE;"
-                f" font-size:0.95rem; font-weight:{fw}; color:#1E1B4B;'>"
-                f"{prefix}{content}</div>"
-            )
-        st.markdown(
-            f"<div style='background:#fff; border:1.5px solid #C4B5FD; border-radius:10px;"
-            f" max-height:260px; overflow-y:auto; margin-bottom:1.2rem;'>"
-            f"{rows_html}</div>",
-            unsafe_allow_html=True)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # テキスト編集エリア（元画像を見ながら修正）
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    st.markdown("---")
+    st.markdown(
+        "<div class='step'><span class='snum' style='font-size:0.95rem;'>✏</span>"
+        "内容を修正する（任意）</div>",
+        unsafe_allow_html=True)
+    st.markdown(
+        "<div class='hint'>左の写真を見ながら、読み取り結果を直接修正できます。"
+        "修正後は「作り直す」ボタンを押してください。</div>",
+        unsafe_allow_html=True)
 
+    col_img, col_edit = st.columns([1, 1], gap="medium")
+
+    with col_img:
+        preview_bytes_edit = st.session_state.get("_preview_bytes")
+        if preview_bytes_edit:
+            st.image(Image.open(io.BytesIO(preview_bytes_edit)),
+                     caption="元の写真", use_container_width=True)
+
+    with col_edit:
+        TYPE_LABEL  = {"heading": "見出し", "bullet": "箇条書き",
+                       "text": "本文", "arrow": "矢印"}
+        SHAPE_LABEL = {"rect": "【四角】", "ellipse": "（丸）"}
+
+        # タイトル
+        title_key = "edit_title"
+        if title_key not in st.session_state:
+            st.session_state[title_key] = extracted.get("title", "")
+        st.text_input("タイトル", key=title_key,
+                      help="スライドのタイトルを修正できます")
+
+        # 各セクション・アイテム
+        edit_sections = extracted.get("sections") or []
+        for si, sec in enumerate(edit_sections):
+            sec_heading = (sec.get("heading") or "").strip()
+            if sec_heading:
+                col_lbl = 1 if sec.get("column", 1) != 2 else 2
+                st.markdown(
+                    f"<p style='margin:0.8rem 0 0.2rem; font-size:0.85rem;"
+                    f" color:#7C3AED; font-weight:700;'>── {sec_heading}"
+                    f"（列{col_lbl}）</p>",
+                    unsafe_allow_html=True)
+            for ii, item in enumerate(sec.get("items") or []):
+                etype  = item.get("type", "text")
+                shape  = item.get("shape", "none")
+                lbl    = SHAPE_LABEL.get(shape, "") + TYPE_LABEL.get(etype, "本文")
+                ekey   = f"edit_{si}_{ii}"
+                if ekey not in st.session_state:
+                    st.session_state[ekey] = item.get("text", "")
+                st.text_input(lbl, key=ekey, label_visibility="visible")
+
+    # 作り直しボタン
+    if st.button("この内容でスライドを作り直す",
+                 type="secondary", use_container_width=True):
+        edited = copy.deepcopy(extracted)
+        # タイトル更新
+        edited["title"] = st.session_state.get("edit_title", edited.get("title", ""))
+        # 各アイテムのテキスト更新
+        for si, sec in enumerate(edited.get("sections") or []):
+            for ii, item in enumerate(sec.get("items") or []):
+                ekey = f"edit_{si}_{ii}"
+                if ekey in st.session_state:
+                    item["text"] = st.session_state[ekey]
+        # elements リストを再構築
+        new_elements = []
+        for sec in edited.get("sections", []):
+            for it in (sec.get("items") or []):
+                idx = len(new_elements)
+                new_elements.append({
+                    "id": f"el_{idx:03d}", "type": it.get("type", "text"),
+                    "content": it.get("text", ""), "shape": it.get("shape", "none"),
+                    "style": {"color": it.get("color", "black"),
+                              "bold": it.get("bold", False)},
+                    "confidence": 1.0,
+                })
+        edited["elements"] = new_elements
+        # 再生成
+        ip = st.session_state.get("_is_portrait", False)
+        st.session_state["extracted"]  = edited
+        st.session_state["pptx_bytes"] = generate_pptx(edited, is_portrait=ip)
+        st.session_state["html_bytes"] = generate_html(edited)
+        st.success("スライドを更新しました。下のボタンから保存してください。")
+
+    st.markdown("---")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # ── iPhone 向け HTML ダウンロード（メイン） ──
