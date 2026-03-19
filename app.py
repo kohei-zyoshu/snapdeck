@@ -352,8 +352,14 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
         raise ValueError(f"JSON解析エラー: {e}\n応答の先頭: {text[:200]}")
 
     # ── sections 形式への正規化 ──
+    # null や欠落を安全に [] へ
+    if not data.get("sections"):
+        data["sections"] = []
+    if not data.get("tables"):
+        data["tables"] = []
+
     # 旧 items 形式が返ってきた場合は sections に変換
-    if "sections" not in data and "items" in data:
+    if not data["sections"] and data.get("items"):
         data["sections"] = [{
             "heading": "",
             "column": 1,
@@ -361,14 +367,19 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str) -> dict:
                 {"text": it.get("text", ""), "type": it.get("type", "text"),
                  "shape": it.get("shape", "none"), "color": it.get("color", "black"),
                  "bold": it.get("bold", False)}
-                for it in data["items"]
+                for it in (data["items"] or [])
             ],
         }]
+
+    # sections 内の items が null のものを修復
+    for sec in data["sections"]:
+        if sec.get("items") is None:
+            sec["items"] = []
 
     # ── UI 表示用の elements リストを sections から構築 ──
     elements = []
     for sec in data.get("sections", []):
-        for it in sec.get("items", []):
+        for it in (sec.get("items") or []):
             idx = len(elements)
             elements.append({
                 "id":      f"el_{idx:03d}",
@@ -548,8 +559,8 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
     CW = SLIDE_W - 0.70    # コンテンツ幅
     CH = SLIDE_H - 1.55    # コンテンツ高さ（フッター分を引く）
 
-    sections = data.get("sections", [])
-    tables   = data.get("tables", [])
+    sections = data.get("sections") or []
+    tables   = data.get("tables") or []
 
     # ── 座標を一切使わない sections ベースのクリーンレイアウト ──
     # AIには「何がどんな構造か」だけ聞き、配置はすべてコードが決める。
@@ -584,7 +595,7 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
         y = CY
         for sec in secs:
             heading = sec.get("heading", "").strip()
-            items   = sec.get("items", [])
+            items   = sec.get("items") or []
 
             # セクション見出し（アンダーライン付き）
             if heading:
@@ -646,8 +657,8 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
 def generate_html(data: dict) -> bytes:
     """iPhone Safari でそのまま開けるHTMLを sections ベースで生成"""
     title    = data.get("title", "メモ")
-    sections = data.get("sections", [])
-    tables   = data.get("tables", [])
+    sections = data.get("sections") or []
+    tables   = data.get("tables") or []
     CMAP = {
         "black": "#1E1B4B", "white": "#6B7280", "red": "#DC2626",
         "blue": "#2563EB", "green": "#16A34A", "yellow": "#B45309",
@@ -678,24 +689,25 @@ def generate_html(data: dict) -> bytes:
 
     def render_section(sec):
         heading = sec.get("heading", "").strip()
-        items   = sec.get("items", [])
+        items   = sec.get("items") or []
         out = ""
         if heading:
             out += f"<h2 class='sec-heading'>{heading}</h2>"
-        bullets = [it for it in items if it.get("type") == "bullet"]
-        others  = [it for it in items if it.get("type") != "bullet"]
-        # 箇条書きをまとめて <ul> に
-        i = 0
+        # 箇条書きをまとめて <ul> に（インデックスを使わず状態フラグで管理）
+        in_ul = False
         for item in items:
             if item.get("type") == "bullet":
-                if i == 0 or items[i-1].get("type") != "bullet":
+                if not in_ul:
                     out += "<ul>"
+                    in_ul = True
                 out += render_item(item)
-                if i == len(items)-1 or items[i+1].get("type") != "bullet":
-                    out += "</ul>"
             else:
+                if in_ul:
+                    out += "</ul>"
+                    in_ul = False
                 out += render_item(item)
-            i += 1
+        if in_ul:
+            out += "</ul>"
         return out
 
     body = ""
@@ -899,6 +911,9 @@ convert_btn = st.button(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 変換処理
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if convert_btn and not img_data:
+    st.error("写真を正しく読み込めませんでした。別の写真を選んでもう一度お試しください。")
+
 if convert_btn and img_data:
     try:
         api_key = get_api_key()
