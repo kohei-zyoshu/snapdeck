@@ -217,20 +217,6 @@ def get_api_key() -> str:
     return st.session_state.get("api_key_input", "").strip()
 
 
-def remove_shadows(img: Image.Image) -> Image.Image:
-    """影・逆光を補正（Retinex 方式：局所輝度を正規化）"""
-    import numpy as np
-    from PIL import ImageFilter
-    arr    = np.array(img, dtype=np.float32)
-    radius = max(40, min(img.width, img.height) // 6)
-    blur   = np.array(img.filter(ImageFilter.GaussianBlur(radius=radius)),
-                      dtype=np.float32)
-    # 背景輝度で割って均一化（暗い部分を持ち上げ、明るい部分を抑制）
-    norm   = arr / (blur / 160.0 + 0.5)
-    norm   = np.clip(norm, 0, 255).astype(np.uint8)
-    return Image.fromarray(norm)
-
-
 def get_pdf_info(file_bytes: bytes) -> int:
     """PDFのページ数を返す"""
     import fitz  # PyMuPDF
@@ -253,17 +239,42 @@ def pdf_page_to_pil(file_bytes: bytes, page_num: int = 0) -> Image.Image:
 
 
 def preprocess_image(img: Image.Image,
-                     do_trim: bool = True,
-                     do_shadow: bool = False) -> Image.Image:
-    """EXIF回転 → 影補正（オプション）→ 余白カット"""
+                     do_trim: bool = True) -> Image.Image:
+    """EXIF回転 → OCR最適化補正（自動）→ 余白カット
+
+    補正方針:
+    1. 照明むらが大きい場合のみ Retinex 正規化（影・逆光を自動検出）
+    2. autocontrast でヒストグラムを常に最大伸張
+    3. シャープネス強化でテキスト輪郭を際立たせる
+    """
+    import numpy as np
+    from PIL import ImageFilter
+
     try:
         img = ImageOps.exif_transpose(img)
     except Exception:
         pass
     if img.mode != "RGB":
         img = img.convert("RGB")
-    if do_shadow:
-        img = remove_shadows(img)
+
+    # ── 照明むら自動検出 ──
+    # ブラー画像の輝度標準偏差が大きいほど照明が不均一
+    radius   = max(40, min(img.width, img.height) // 6)
+    blur_pil = img.filter(ImageFilter.GaussianBlur(radius=radius))
+    blur_l   = np.array(blur_pil.convert("L"), dtype=np.float32)
+    if float(blur_l.std()) > 22:      # 照明むらが目立つ → Retinex で均一化
+        arr  = np.array(img, dtype=np.float32)
+        blur = np.array(blur_pil, dtype=np.float32)
+        norm = arr / (blur / 160.0 + 0.5)
+        img  = Image.fromarray(np.clip(norm, 0, 255).astype(np.uint8))
+
+    # ── ヒストグラム自動伸張（常に適用） ──
+    img = ImageOps.autocontrast(img, cutoff=1)
+
+    # ── シャープネス強化 ──
+    img = ImageEnhance.Sharpness(img).enhance(1.5)
+
+    # ── 余白カット ──
     if do_trim:
         bg   = Image.new("RGB", img.size, (255, 255, 255))
         diff = ImageChops.difference(img, bg)
@@ -280,10 +291,7 @@ def preprocess_image(img: Image.Image,
 
 
 def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
-    """PIL Image → OCR用 base64（コントラスト強化・高解像度）"""
-    # 適度なコントラスト・シャープネス向上（過剰補正は逆効果）
-    img = ImageEnhance.Contrast(img).enhance(1.3)
-    img = ImageEnhance.Sharpness(img).enhance(1.4)
+    """PIL Image → OCR用 base64（preprocess 済み画像をそのままエンコード）"""
     if img.width > max_px or img.height > max_px:
         img.thumbnail((max_px, max_px), Image.LANCZOS)
     buf = io.BytesIO()
@@ -293,8 +301,7 @@ def pil_to_base64(img: Image.Image, max_px: int = 2048) -> tuple[str, str]:
 
 @st.cache_data(show_spinner=False)
 def cached_process_image(file_bytes: bytes,
-                         do_trim: bool,
-                         do_shadow: bool) -> tuple[str, str, bool, bytes]:
+                         do_trim: bool) -> tuple[str, str, bool, bytes]:
     """
     画像のバイト列を受け取り、前処理 → base64変換 → プレビュー用バイト列を返す。
     同じ入力なら Streamlit がキャッシュするため、リランのたびに再処理されない。
@@ -303,7 +310,7 @@ def cached_process_image(file_bytes: bytes,
     pil = Image.open(io.BytesIO(file_bytes))
     if pil.mode != "RGB":
         pil = pil.convert("RGB")
-    disp = preprocess_image(pil, do_trim=do_trim, do_shadow=do_shadow)
+    disp = preprocess_image(pil, do_trim=do_trim)
     is_portrait = disp.height > disp.width
     img_data, media_type = pil_to_base64(disp)
     # プレビュー用にJPEGバイト列として保持（PIL Imageはキャッシュ不可）
@@ -896,11 +903,7 @@ if uploaded_file:
         value=True,
         help="不要な余白を取り除いて、読み取り精度をアップします。",
     )
-    do_shadow = st.toggle(
-        "影・逆光を補正する",
-        value=False,
-        help="照明が偏っている写真や影が入っている場合に効果的です。",
-    )
+    st.caption("影・逆光・コントラストはAIが自動で最適化します")
 
     try:
         file_bytes = uploaded_file.getvalue()
@@ -919,7 +922,7 @@ if uploaded_file:
 
         # キャッシュ済み処理（同一ファイル＋設定ならリランしても即返却）
         img_data, media_type, is_portrait, preview_bytes = cached_process_image(
-            proc_bytes, do_trim, do_shadow
+            proc_bytes, do_trim
         )
 
         # ファイルが変わったら前の変換結果・編集内容をリセット
@@ -1063,49 +1066,48 @@ if "extracted" in st.session_state:
         "内容を修正する（任意）</div>",
         unsafe_allow_html=True)
     st.markdown(
-        "<div class='hint'>左の写真を見ながら、読み取り結果を直接修正できます。"
+        "<div class='hint'>元の写真を確認しながら、読み取り結果を直接修正できます。"
         "修正後は「作り直す」ボタンを押してください。</div>",
         unsafe_allow_html=True)
 
-    col_img, col_edit = st.columns([1, 1], gap="medium")
-
-    with col_img:
-        preview_bytes_edit = st.session_state.get("_preview_bytes")
-        if preview_bytes_edit:
+    # 元画像（エクスパンダーで表示 — スマホでも邪魔にならない）
+    preview_bytes_edit = st.session_state.get("_preview_bytes")
+    if preview_bytes_edit:
+        with st.expander("元の写真を確認する", expanded=True):
             st.image(Image.open(io.BytesIO(preview_bytes_edit)),
-                     caption="元の写真", use_container_width=True)
+                     use_container_width=True)
 
-    with col_edit:
-        TYPE_LABEL  = {"heading": "見出し", "bullet": "箇条書き",
-                       "text": "本文", "arrow": "矢印"}
-        SHAPE_LABEL = {"rect": "【四角】", "ellipse": "（丸）"}
+    # 編集フォーム（全幅 — スマホ・PCどちらでも使いやすい）
+    TYPE_LABEL  = {"heading": "見出し", "bullet": "箇条書き",
+                   "text": "本文", "arrow": "矢印"}
+    SHAPE_LABEL = {"rect": "【四角】", "ellipse": "（丸）"}
 
-        # タイトル
-        title_key = "edit_title"
-        if title_key not in st.session_state:
-            st.session_state[title_key] = extracted.get("title", "")
-        st.text_input("タイトル", key=title_key,
-                      help="スライドのタイトルを修正できます")
+    # タイトル
+    title_key = "edit_title"
+    if title_key not in st.session_state:
+        st.session_state[title_key] = extracted.get("title", "")
+    st.text_input("タイトル", key=title_key,
+                  help="スライドのタイトルを修正できます")
 
-        # 各セクション・アイテム
-        edit_sections = extracted.get("sections") or []
-        for si, sec in enumerate(edit_sections):
-            sec_heading = (sec.get("heading") or "").strip()
-            if sec_heading:
-                col_lbl = 1 if sec.get("column", 1) != 2 else 2
-                st.markdown(
-                    f"<p style='margin:0.8rem 0 0.2rem; font-size:0.85rem;"
-                    f" color:#7C3AED; font-weight:700;'>── {sec_heading}"
-                    f"（列{col_lbl}）</p>",
-                    unsafe_allow_html=True)
-            for ii, item in enumerate(sec.get("items") or []):
-                etype  = item.get("type", "text")
-                shape  = item.get("shape", "none")
-                lbl    = SHAPE_LABEL.get(shape, "") + TYPE_LABEL.get(etype, "本文")
-                ekey   = f"edit_{si}_{ii}"
-                if ekey not in st.session_state:
-                    st.session_state[ekey] = item.get("text", "")
-                st.text_input(lbl, key=ekey, label_visibility="visible")
+    # 各セクション・アイテム
+    edit_sections = extracted.get("sections") or []
+    for si, sec in enumerate(edit_sections):
+        sec_heading = (sec.get("heading") or "").strip()
+        if sec_heading:
+            col_lbl = 1 if sec.get("column", 1) != 2 else 2
+            st.markdown(
+                f"<p style='margin:0.8rem 0 0.2rem; font-size:0.85rem;"
+                f" color:#7C3AED; font-weight:700;'>── {sec_heading}"
+                f"（列{col_lbl}）</p>",
+                unsafe_allow_html=True)
+        for ii, item in enumerate(sec.get("items") or []):
+            etype  = item.get("type", "text")
+            shape  = item.get("shape", "none")
+            lbl    = SHAPE_LABEL.get(shape, "") + TYPE_LABEL.get(etype, "本文")
+            ekey   = f"edit_{si}_{ii}"
+            if ekey not in st.session_state:
+                st.session_state[ekey] = item.get("text", "")
+            st.text_input(lbl, key=ekey, label_visibility="visible")
 
     # 作り直しボタン
     if st.button("この内容でスライドを作り直す",
