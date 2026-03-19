@@ -186,7 +186,7 @@ button, a { touch-action: manipulation; -webkit-appearance: none; }
     padding: 0 1.5rem !important;
 }
 [data-testid="stFileUploaderDropzone"] button::after {
-    content: "写真を撮る・ファイルを選ぶ";
+    content: "写真・ファイルを選ぶ";
     font-size: 1.0rem;
     font-weight: 700;
 }
