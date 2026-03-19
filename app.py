@@ -1076,21 +1076,17 @@ if convert_btn and img_data:
             st.warning("認証キーが設定されていません。左上のメニューから設定してください。")
             st.stop()
 
-        status   = st.empty()
-        progress = st.progress(0)
+        # ── ① 準備（瞬時に完了）──
+        prog = st.progress(0, text="写真を準備しています…")
+        prog.progress(30, text="写真を準備しています…")
 
-        status.markdown("**① 写真を準備しています…**")
-        progress.progress(15)
-        status.markdown("**② 写真を読み取っています…**")
-        progress.progress(35)
+        # ── ② AI読み取り（最も時間がかかる → スピナーで安心感を演出）──
+        with st.spinner("AIが文字を読み取り中です。そのままお待ちください（通常10〜30秒）…"):
+            extracted = analyze_with_claude(img_data, media_type, api_key,
+                                            model=selected_model)
 
-        extracted = analyze_with_claude(img_data, media_type, api_key,
-                                        model=selected_model)
-
-        status.markdown("**③ 文字の読み取りが完了しました**")
-        progress.progress(70)
-        status.markdown("**④ スライドを作成しています…**")
-        progress.progress(88)
+        # ── ③ スライド生成（数秒）──
+        prog.progress(80, text="スライドを作成しています…")
 
         is_portrait = st.session_state.get("_is_portrait", False)
         st.session_state["extracted"]   = extracted
@@ -1104,8 +1100,9 @@ if convert_btn and img_data:
         for k in [k for k in st.session_state if k.startswith("edit_")]:
             del st.session_state[k]
 
-        progress.progress(100)
-        status.markdown("**完了しました。下にスクロールして保存してください。**")
+        prog.progress(100, text="完了しました！")
+        prog.empty()
+        st.success("変換できました。下にスクロールして保存してください。")
 
     except Exception as e:
         err_msg = str(e)
