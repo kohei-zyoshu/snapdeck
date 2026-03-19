@@ -319,40 +319,44 @@ def cached_process_image(file_bytes: bytes,
     return img_data, media_type, is_portrait, preview_buf.getvalue()
 
 
-# Unicode 丸数字（①〜⑳）
-_CIRCLE = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+# 色帯パレット（アイテムごとに割り当てる 12 色）
+_BAND_COLORS = [
+    (231, 76,  60),   # red
+    (52,  152, 219),  # blue
+    (39,  174, 96),   # green
+    (155, 89,  182),  # purple
+    (230, 126, 34),   # orange
+    (32,  178, 170),  # teal
+    (236, 72,  153),  # pink
+    (99,  110, 250),  # indigo
+    (243, 156, 18),   # yellow
+    (76,  201, 240),  # cyan
+    (67,  97,  238),  # royal blue
+    (247, 37,  133),  # hot pink
+]
 
-def circle_num(n: int) -> str:
-    return _CIRCLE[n - 1] if 1 <= n <= 20 else f"({n})"
+def item_color_hex(global_idx: int) -> str:
+    r, g, b = _BAND_COLORS[global_idx % len(_BAND_COLORS)]
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def build_annotated_image(preview_bytes: bytes, data: dict) -> bytes:
-    """抽出アイテムに対応する番号丸印を画像に描画して返す。
-    各 item に '_num' キーを付与（編集フォームのラベルと対応）。
+    """各アイテムの位置に色帯オーバーレイを描画した画像を返す。
+    左端に不透明バー、全幅に薄い帯を重ねることで
+    フォームの色インジケーターとの対応を視覚的に示す。
     """
-    from PIL import ImageDraw, ImageFont
+    from PIL import ImageDraw
 
-    img  = Image.open(io.BytesIO(preview_bytes)).convert("RGB")
-    draw = ImageDraw.Draw(img)
+    img  = Image.open(io.BytesIO(preview_bytes)).convert("RGBA")
     W, H = img.size
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw    = ImageDraw.Draw(overlay)
 
-    R         = max(14, min(22, H // 40))   # 丸の半径
-    font_size = max(11, R - 3)
-    font      = None
-    for fp in [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-    ]:
-        try:
-            font = ImageFont.truetype(fp, font_size)
-            break
-        except Exception:
-            pass
-    if font is None:
-        font = ImageFont.load_default()
+    band_h = max(8, H // 45)      # 帯の高さ
+    side_w = max(20, W // 35)     # 左端インジケーター幅
+    MIN_GAP = band_h + 2
+    last_cy = -MIN_GAP
 
-    # 全アイテムを収集し、y_pct がない場合は均等割り当て
     all_items = [
         item
         for sec in (data.get("sections") or [])
@@ -360,33 +364,24 @@ def build_annotated_image(preview_bytes: bytes, data: dict) -> bytes:
     ]
     total = len(all_items)
 
-    # y_pct に基づいて連番を付け、重なりを最小間隔で補正
-    MIN_GAP  = R * 2 + 3
-    last_cy  = -MIN_GAP
     for idx, item in enumerate(all_items):
-        num   = idx + 1
-        item["_num"] = num
+        r, g, b = _BAND_COLORS[idx % len(_BAND_COLORS)]
 
-        yp    = item.get("y_pct")
+        yp = item.get("y_pct")
         if yp is None:
             yp = int(100 * (idx + 0.5) / max(total, 1))
-        cy    = max(R + 2, min(H - R - 2, int(H * yp / 100)))
-        cy    = max(cy, last_cy + MIN_GAP)   # 重なり防止
+        cy = max(band_h + 2, min(H - band_h - 2, int(H * yp / 100)))
+        cy = max(cy, last_cy + MIN_GAP)
         last_cy = cy
 
-        # 左端に丸印を描画
-        cx = R + 4
-        draw.ellipse(
-            [cx - R, cy - R, cx + R, cy + R],
-            fill=(124, 58, 237), outline=(255, 255, 255), width=2,
-        )
-        txt  = str(num)
-        bbox = draw.textbbox((0, 0), txt, font=font)
-        tw   = bbox[2] - bbox[0]
-        th   = bbox[3] - bbox[1]
-        draw.text((cx - tw // 2, cy - th // 2), txt,
-                  fill=(255, 255, 255), font=font)
+        y0, y1 = cy - band_h // 2, cy + band_h // 2
 
+        # 全幅：薄い透明帯（識別しやすいが文字を隠さない）
+        draw.rectangle([0, y0, W, y1], fill=(r, g, b, 55))
+        # 左端：不透明インジケーターバー
+        draw.rectangle([0, y0, side_w, y1], fill=(r, g, b, 230))
+
+    img = Image.alpha_composite(img, overlay).convert("RGB")
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return buf.getvalue()
@@ -1154,7 +1149,7 @@ if "extracted" in st.session_state:
     plain_bytes = st.session_state.get("_preview_bytes")
     disp_bytes = ann_bytes or plain_bytes
     if disp_bytes:
-        with st.expander("元の写真を確認する（番号は下のフォームと対応）", expanded=True):
+        with st.expander("元の写真を確認する（色帯がフォームの■と対応）", expanded=True):
             st.image(Image.open(io.BytesIO(disp_bytes)), use_container_width=True)
 
     # 編集フォーム（全幅 — スマホ・PCどちらでも使いやすい）
@@ -1166,11 +1161,15 @@ if "extracted" in st.session_state:
     title_key = "edit_title"
     if title_key not in st.session_state:
         st.session_state[title_key] = extracted.get("title", "")
-    st.text_input("タイトル", key=title_key,
-                  help="スライドのタイトルを修正できます")
+    st.markdown(
+        "<p style='font-size:0.88rem; font-weight:700; color:#1E1B4B;"
+        " margin:0.5rem 0 0.1rem;'>タイトル</p>",
+        unsafe_allow_html=True)
+    st.text_input("タイトル", key=title_key, label_visibility="collapsed")
 
-    # 各セクション・アイテム（番号付き）
+    # 各セクション・アイテム（色インジケーター付き）
     edit_sections = extracted.get("sections") or []
+    global_idx = 0
     for si, sec in enumerate(edit_sections):
         sec_heading = (sec.get("heading") or "").strip()
         if sec_heading:
@@ -1181,15 +1180,23 @@ if "extracted" in st.session_state:
                 f"（列{col_lbl}）</p>",
                 unsafe_allow_html=True)
         for ii, item in enumerate(sec.get("items") or []):
-            etype  = item.get("type", "text")
-            shape  = item.get("shape", "none")
-            num    = item.get("_num")
-            cn     = f" {circle_num(num)}" if num else ""
-            lbl    = SHAPE_LABEL.get(shape, "") + TYPE_LABEL.get(etype, "本文") + cn
-            ekey   = f"edit_{si}_{ii}"
+            etype   = item.get("type", "text")
+            shape   = item.get("shape", "none")
+            lbl     = SHAPE_LABEL.get(shape, "") + TYPE_LABEL.get(etype, "本文")
+            chex    = item_color_hex(global_idx)
+            ekey    = f"edit_{si}_{ii}"
             if ekey not in st.session_state:
                 st.session_state[ekey] = item.get("text", "")
-            st.text_input(lbl, key=ekey, label_visibility="visible")
+            # 色付きラベル（■ + テキスト種別）
+            st.markdown(
+                f"<p style='font-size:0.88rem; font-weight:700; color:#1E1B4B;"
+                f" margin:0.6rem 0 0.1rem;'>"
+                f"<span style='display:inline-block; width:13px; height:13px;"
+                f" background:{chex}; border-radius:3px; margin-right:5px;"
+                f" vertical-align:middle;'></span>{lbl}</p>",
+                unsafe_allow_html=True)
+            st.text_input(lbl, key=ekey, label_visibility="collapsed")
+            global_idx += 1
 
     # 作り直しボタン
     if st.button("この内容でスライドを作り直す",
