@@ -436,6 +436,79 @@ def build_annotated_image(preview_bytes: bytes, data: dict) -> bytes:
     return buf.getvalue()
 
 
+def build_split_view_html(preview_bytes: bytes, data: dict) -> str:
+    """左：元画像、右：抽出テキストを y_pct 位置に配置した HTML を返す。
+    CSS aspect-ratio ボックス技法で左右の高さを揃え、
+    各アイテムを画像内の対応行に視覚的に並べる。
+    """
+    # 画像を base64 化
+    img_b64  = base64.b64encode(preview_bytes).decode()
+    img_pil  = Image.open(io.BytesIO(preview_bytes))
+    img_w, img_h = img_pil.size
+    # 右パネルの高さを左画像と揃えるための padding-top 値
+    aspect_pct = round(img_h / img_w * 100, 2)
+
+    all_items = [
+        item
+        for sec in (data.get("sections") or [])
+        for item in (sec.get("items") or [])
+    ]
+    total = len(all_items)
+
+    # ── テキスト行スナップ ──
+    text_lines = detect_text_rows(img_pil)
+
+    chips = ""
+    for idx, item in enumerate(all_items):
+        yp   = item.get("y_pct")
+        if yp is None:
+            yp = int(100 * (idx + 0.5) / max(total, 1))
+        yp   = snap_y_to_line(yp, img_h, text_lines)
+        text = item.get("text", "")
+        disp = (text[:28] + "…") if len(text) > 28 else text
+        chex = item_color_hex(idx)
+
+        chips += (
+            f"<div style='position:absolute; top:calc({yp}% - 13px);"
+            f" left:0; right:0; padding:0 4px;'>"
+            f"<div style='background:{chex}18; border:1.5px solid {chex};"
+            f" border-radius:6px; padding:2px 9px; font-size:0.78rem;"
+            f" font-weight:700; color:#1E1B4B; overflow:hidden;"
+            f" text-overflow:ellipsis; white-space:nowrap;"
+            f" box-shadow:0 1px 4px rgba(0,0,0,0.07);'>{disp}</div></div>"
+        )
+
+    html = (
+        "<div style='display:flex; gap:10px; align-items:flex-start;"
+        " margin-bottom:0.5rem;'>"
+
+        # 左：元画像
+        "<div style='flex:1; min-width:0;'>"
+        f"<img src='data:image/jpeg;base64,{img_b64}'"
+        " style='width:100%; display:block; border-radius:8px;"
+        " box-shadow:0 2px 8px rgba(0,0,0,0.13);'>"
+        "</div>"
+
+        # 右：チップを絶対配置（aspect-ratio ボックスで高さを左に合わせる）
+        "<div style='flex:1; min-width:0; position:relative;"
+        f" padding-top:{aspect_pct}%;'>"
+        "<div style='position:absolute; top:0; left:0; right:0; bottom:0;"
+        " overflow:hidden;'>"
+        f"{chips}"
+        "</div></div>"
+
+        "</div>"
+
+        # スマホ対応：560px 未満で縦積みへ
+        "<style>"
+        "@media(max-width:560px){"
+        " .spv-outer{flex-direction:column !important;}"
+        "}"
+        "</style>"
+    )
+    return html
+
+
 EXTRACTION_PROMPT = """あなたは優秀なOCRエンジンです。
 この画像（ホワイトボード・手書きメモ・付箋など）の内容を読み取り、プレゼンテーション用に整理してください。
 
@@ -1136,10 +1209,6 @@ if convert_btn and img_data:
         st.session_state["extracted"]   = extracted
         st.session_state["pptx_bytes"]  = generate_pptx(extracted, is_portrait=is_portrait)
         st.session_state["html_bytes"]  = generate_html(extracted)
-        # アノテーション画像を生成（番号丸印付き）
-        _prev = st.session_state.get("_preview_bytes")
-        if _prev:
-            st.session_state["_annotated_bytes"] = build_annotated_image(_prev, extracted)
         # 新規変換時は編集キーをクリア（前回の編集内容を引き継がせない）
         for k in [k for k in st.session_state if k.startswith("edit_")]:
             del st.session_state[k]
@@ -1193,13 +1262,11 @@ if "extracted" in st.session_state:
         "修正後は「作り直す」ボタンを押してください。</div>",
         unsafe_allow_html=True)
 
-    # アノテーション画像（番号丸印付き）— エクスパンダーで表示
-    ann_bytes = st.session_state.get("_annotated_bytes")
-    plain_bytes = st.session_state.get("_preview_bytes")
-    disp_bytes = ann_bytes or plain_bytes
-    if disp_bytes:
-        with st.expander("元の写真を確認する（色帯がフォームの■と対応）", expanded=True):
-            st.image(Image.open(io.BytesIO(disp_bytes)), use_container_width=True)
+    # ── 左右分割ビュー（元画像 ↔ 抽出テキスト） ──
+    preview_bytes_sv = st.session_state.get("_preview_bytes")
+    if preview_bytes_sv:
+        sv_html = build_split_view_html(preview_bytes_sv, extracted)
+        st.markdown(sv_html, unsafe_allow_html=True)
 
     # 編集フォーム（全幅 — スマホ・PCどちらでも使いやすい）
     TYPE_LABEL  = {"heading": "見出し", "bullet": "箇条書き",
@@ -1277,10 +1344,6 @@ if "extracted" in st.session_state:
         st.session_state["extracted"]  = edited
         st.session_state["pptx_bytes"] = generate_pptx(edited, is_portrait=ip)
         st.session_state["html_bytes"] = generate_html(edited)
-        # アノテーション画像も更新
-        _prev = st.session_state.get("_preview_bytes")
-        if _prev:
-            st.session_state["_annotated_bytes"] = build_annotated_image(_prev, edited)
         st.success("スライドを更新しました。下のボタンから保存してください。")
 
     st.markdown("---")
