@@ -164,7 +164,7 @@ button, a { touch-action: manipulation; -webkit-appearance: none; }
 [data-testid="stFileUploaderDropzoneInstructions"] span,
 [data-testid="stFileUploaderDropzoneInstructions"] small { display: none !important; }
 [data-testid="stFileUploaderDropzoneInstructions"]::before {
-    content: "写真をドラッグするか、下のボタンで選んでください";
+    content: "ドラッグまたはボタンで選択";
     display: block;
     font-size: 1.0rem;
     color: #5B21B6;
@@ -172,7 +172,7 @@ button, a { touch-action: manipulation; -webkit-appearance: none; }
     text-align: center;
 }
 [data-testid="stFileUploaderDropzoneInstructions"]::after {
-    content: "対応形式：JPG・PNG・WebP・PDF　最大20MBまで";
+    content: "JPG・PNG・WebP・PDF（最大20MB）";
     display: block;
     font-size: 0.85rem;
     color: #8B5CF6;
@@ -186,7 +186,7 @@ button, a { touch-action: manipulation; -webkit-appearance: none; }
     padding: 0 1.5rem !important;
 }
 [data-testid="stFileUploaderDropzone"] button::after {
-    content: "写真・ファイルを選ぶ";
+    content: "ファイルを選ぶ";
     font-size: 1.0rem;
     font-weight: 700;
 }
@@ -365,6 +365,7 @@ STEP3: 出現順に blocks 配列へ記録する。
 - color: black / red / blue / green / orange / purple / pink / gray / brown / yellow
 - table の headers: 見出し行がない場合は []
 - 画像内のすべての文字を漏れなく・正確に読む（推測・省略・合体禁止）
+- 読み取れなかった・自信のない文字は [?] で示す（例: "田中[?]"、"合計[?]円"）
 - JSONのみ返す（説明文・コードブロック・改行コード不要）"""
 
 
@@ -894,7 +895,7 @@ def generate_html(data: dict) -> bytes:
 st.markdown("""
 <div class='top-bar'>
   <div class='top-bar-logo'>パシャッ<em>と</em></div>
-  <div class='top-bar-tagline'>大切なメモを<br>きれいなスライドへ</div>
+  <div class='top-bar-tagline'>メモをスライドに変換</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -917,10 +918,10 @@ if not get_api_key():
 # ステップ１　写真を選ぶ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 st.markdown(
-    "<div class='step'><span class='snum'>１</span>写真を選ぶ</div>",
+    "<div class='step'><span class='snum'>１</span>ファイルを選ぶ</div>",
     unsafe_allow_html=True)
 st.markdown(
-    "<div class='hint'>ホワイトボード・メモ帳の写真や、スキャンしたPDFを選ぶだけ。あとはAIがきれいに仕上げます。</div>",
+    "<div class='hint'>メモ・ホワイトボード・資料の写真やPDFをAIが読み取ってスライドに変換します。</div>",
     unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader(
@@ -960,7 +961,7 @@ if uploaded_file:
                     help=f"1〜{page_count} の範囲で選べます",
                 ) - 1   # 0-indexed に変換
             else:
-                st.caption("PDF（1ページ）を読み込みました")
+                st.caption("PDF（1ページ）")
         except Exception as pdf_info_err:
             st.error(f"PDFの読み込みに失敗しました。（{pdf_info_err}）")
 
@@ -969,7 +970,7 @@ if uploaded_file:
         value=True,
         help="不要な余白を取り除いて、読み取り精度をアップします。",
     )
-    st.caption("影・逆光・コントラストはAIが自動で最適化します")
+    st.caption("明るさ・コントラストはAIが自動調整")
 
     try:
         file_bytes = uploaded_file.getvalue()
@@ -1005,9 +1006,9 @@ if uploaded_file:
         st.session_state["_is_portrait"]    = is_portrait
         st.session_state["_preview_bytes"]  = preview_bytes
 
-        orient_label = "縦（ポートレート）" if is_portrait else "横（ランドスケープ）"
-        cap_label    = "変換するページ" if is_pdf else "変換する写真"
-        st.caption(f"スライド向き：{orient_label} で出力します")
+        orient_label = "縦" if is_portrait else "横"
+        cap_label    = f"ページ {pdf_page_num + 1}" if is_pdf else "変換元"
+        st.caption(f"スライド向き：{orient_label}で出力")
         st.image(Image.open(io.BytesIO(preview_bytes)),
                  caption=cap_label, use_container_width=True)
 
@@ -1026,7 +1027,7 @@ st.markdown(
 if not uploaded_file:
     st.markdown(
         "<div class='hint' style='border-color:#C4B5FD; background:#F5F3FF;'>"
-        "まず写真を選んでください。"
+        "まずファイルを選んでください。"
         "</div>",
         unsafe_allow_html=True)
 
@@ -1069,7 +1070,7 @@ if convert_btn and img_data:
         prog.progress(30, text="写真を準備しています…")
 
         # ── ② AI読み取り（最も時間がかかる → スピナーで安心感を演出）──
-        with st.spinner("AIが文字を読み取り中です。そのままお待ちください（通常10〜30秒）…"):
+        with st.spinner("AIが読み取り中です…"):
             extracted = analyze_with_claude(img_data, media_type, api_key,
                                             model=selected_model)
 
@@ -1086,7 +1087,7 @@ if convert_btn and img_data:
 
         prog.progress(100, text="完了しました！")
         prog.empty()
-        st.success("変換できました。下にスクロールして保存してください。")
+        st.success("変換できました！")
 
     except Exception as e:
         err_msg = str(e)
@@ -1129,15 +1130,14 @@ if "extracted" in st.session_state:
         "内容を修正する（任意）</div>",
         unsafe_allow_html=True)
     st.markdown(
-        "<div class='hint'>元の写真を確認しながら、読み取り結果を直接修正できます。"
-        "修正後は「作り直す」ボタンを押してください。</div>",
+        "<div class='hint'>読み取り結果を修正できます。<strong>[?]</strong> は読み取りが不確かな箇所です。</div>",
         unsafe_allow_html=True)
 
     # ── 元画像プレビュー ──
     preview_bytes_sv = st.session_state.get("_preview_bytes")
     if preview_bytes_sv:
         st.image(Image.open(io.BytesIO(preview_bytes_sv)),
-                 caption="変換元の写真", use_container_width=True)
+                 caption="変換元", use_container_width=True)
 
     # 編集フォーム（全幅 — スマホ・PCどちらでも使いやすい）
     TYPE_LABEL  = {"heading": "見出し", "bullet": "箇条書き",
