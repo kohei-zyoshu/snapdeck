@@ -343,39 +343,94 @@ def item_color_hex(global_idx: int) -> str:
 
 
 EXTRACTION_PROMPT = """あなたは優秀なOCRエンジンです。
-この画像（ホワイトボード・手書きメモ・付箋など）の内容を読み取り、プレゼンテーション用に整理してください。
+この画像（ホワイトボード・手書きメモ・付箋・資料など）の内容を正確に読み取り、プレゼンテーション用に整理してください。
 
 【解析手順】
-STEP1: 画像全体を俯瞰して「1列構成か2列構成か」を判断する。
-STEP2: 上から下・左から右の順にすべての文字を正確に読み取る。
-STEP3: 意味的なまとまり（セクション）ごとにグループ化する。
-  ・明確な区切り・見出しがあればセクションを分ける
+STEP1: 画像全体を俯瞰して「1列構成か2列構成か」「表があるか」を確認する。
+STEP2: 上から下・左から右の順にすべての文字と表を正確に読み取る。
+STEP3: 出現順に blocks 配列へ記録する。
+  ・文章・箇条書き・見出しのかたまり → type:"section"
+  ・罫線・格子状の行列構造 → type:"table"
   ・2列構成なら左側を column:1、右側を column:2 とする
 
 【返却JSON形式】
-{"title":"最も目立つタイトル・主題（スライドのタイトルとなる1行）","sections":[{"heading":"セクション見出し（なければ空文字）","column":1,"items":[{"text":"正確な文字列","type":"heading","shape":"none","color":"black","bold":true},{"text":"箇条書き","type":"bullet","shape":"none","color":"black","bold":false},{"text":"四角囲み","type":"text","shape":"rect","color":"red","bold":false},{"text":"丸囲み","type":"text","shape":"ellipse","color":"blue","bold":false},{"text":"矢印ラベル","type":"arrow","shape":"none","color":"black","bold":false}]}],"tables":[{"headers":["列1","列2"],"rows":[["値1","値2"]]}]}
+"title":"タイトル","blocks":[{"type":"section","heading":"見出し（なければ空文字）","column":1,"items":[{"text":"大見出し","type":"heading","shape":"none","color":"black","bold":true},{"text":"箇条書き","type":"bullet","shape":"none","color":"black","bold":false},{"text":"四角囲み","type":"text","shape":"rect","color":"red","bold":false},{"text":"丸囲み","type":"text","shape":"ellipse","color":"blue","bold":false},{"text":"矢印","type":"arrow","shape":"none","color":"black","bold":false}]},{"type":"table","headers":["列1","列2"],"rows":[["値1","値2"]]}]}
 
 【必須ルール】
-- title はスライドヘッダー専用（sections の items には含めない）
-- column: 左側・1列レイアウトは 1、右側コンテンツは 2
-- type: heading（大きな文字・見出し）/ bullet（箇条書き）/ text（通常）/ arrow（矢印ラベル）
-- shape: 四角囲み="rect"、丸・楕円囲み="ellipse"、囲みなし="none"
-- color: black/red/blue/green/orange/purple/pink/gray/brown/yellow
-- 画像内のすべての文字を漏れなく・正確に読む（推測・省略禁止）
-- 罫線・格子状の枠・行列構造があれば必ず tables に入れる（箇条書きや文章は sections に入れる）
-- tables の headers は最初の行（見出し行）を入れる。見出し行がない場合は [] にする
-- 表がなければ tables:[]
-- JSONのみ返す（説明文・コードブロック不要）"""
+- title はスライドヘッダー専用（blocks の items に含めない）
+- blocks は画像内の出現順（上から下）に並べる
+- section の column: 左側・1列レイアウトは 1、右側コンテンツは 2
+- type: heading / bullet / text / arrow
+- shape: rect（四角囲み）/ ellipse（丸囲み）/ none（囲みなし）
+- color: black / red / blue / green / orange / purple / pink / gray / brown / yellow
+- table の headers: 見出し行がない場合は []
+- 画像内のすべての文字を漏れなく・正確に読む（推測・省略・合体禁止）
+- JSONのみ返す（説明文・コードブロック・改行コード不要）"""
+
+
+def _parse_json_response(raw: str) -> dict:
+    """AI応答テキストを堅牢にJSONパースして返す。"""
+    text = re.sub(r"```(?:json)?\s*", "", raw)
+    text = re.sub(r"```", "", text).strip()
+    start = text.find("{")
+    end   = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError(f"応答にJSONが見つかりません（先頭: {raw[:200]}）")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[start:end + 1])
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"JSON解析エラー: {e}\n先頭: {text[:200]}")
+
+
+def _normalize_blocks(data: dict) -> dict:
+    """旧フォーマット（sections + tables）を blocks[] に統一し、
+    各ブロックの null 値を修復する。"""
+    # ── 新フォーマット（blocks あり）の正規化 ──
+    if data.get("blocks"):
+        for b in data["blocks"]:
+            if b.get("type") == "section" and b.get("items") is None:
+                b["items"] = []
+        return data
+
+    # ── 旧フォーマット（sections + tables）→ blocks に変換 ──
+    blocks: list[dict] = []
+    for sec in (data.get("sections") or []):
+        if sec.get("items") is None:
+            sec["items"] = []
+        blocks.append({"type": "section", **sec})
+    # 旧 items フラット形式の互換
+    if not blocks and data.get("items"):
+        blocks.append({
+            "type": "section", "heading": "", "column": 1,
+            "items": [
+                {"text": it.get("text", ""), "type": it.get("type", "text"),
+                 "shape": it.get("shape", "none"), "color": it.get("color", "black"),
+                 "bold": it.get("bold", False)}
+                for it in (data["items"] or [])
+            ],
+        })
+    for tbl in (data.get("tables") or []):
+        blocks.append({"type": "table", **tbl})
+    data["blocks"] = blocks
+    return data
 
 
 def analyze_with_claude(img_data: str, media_type: str, api_key: str,
                         model: str = "claude-sonnet-4-6") -> dict:
-    """AIで画像を解析（堅牢なJSON抽出）"""
+    """AIで画像を解析し、blocks[] 形式の構造化データを返す。
+
+    精度向上のための施策:
+    - temperature=0: JSON出力の再現性を高める
+    - assistant prefill: 出力を即座に { で始めさせ、前置きを排除
+    - _parse_json_response: 堅牢な3ステップJSONクリーニング
+    """
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model=model,
         max_tokens=8192,
+        temperature=0,          # 決定論的出力でJSON崩れを防ぐ
         messages=[
             {"role": "user", "content": [
                 {"type": "image", "source": {
@@ -383,57 +438,21 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str,
                 }},
                 {"type": "text", "text": EXTRACTION_PROMPT},
             ]},
+            {"role": "assistant", "content": "{"},  # prefill: { から即始める
         ]
     )
-    raw = message.content[0].text.strip()
+    # prefill した { を補って完全なJSONにする
+    raw = "{" + message.content[0].text.strip()
 
-    # ① コードブロック除去
-    text = re.sub(r"```(?:json)?\s*", "", raw)
-    text = re.sub(r"```", "", text).strip()
+    data = _parse_json_response(raw)
+    data = _normalize_blocks(data)
 
-    # ② 最初の { から最後の } を抽出
-    start = text.find("{")
-    end   = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"応答にJSONが見つかりません（応答の先頭: {raw[:200]}）")
-    text = text[start:end + 1]
-
-    # ③ 制御文字を除去してパース
-    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"JSON解析エラー: {e}\n応答の先頭: {text[:200]}")
-
-    # ── sections 形式への正規化 ──
-    # null や欠落を安全に [] へ
-    if not data.get("sections"):
-        data["sections"] = []
-    if not data.get("tables"):
-        data["tables"] = []
-
-    # 旧 items 形式が返ってきた場合は sections に変換
-    if not data["sections"] and data.get("items"):
-        data["sections"] = [{
-            "heading": "",
-            "column": 1,
-            "items": [
-                {"text": it.get("text", ""), "type": it.get("type", "text"),
-                 "shape": it.get("shape", "none"), "color": it.get("color", "black"),
-                 "bold": it.get("bold", False)}
-                for it in (data["items"] or [])
-            ],
-        }]
-
-    # sections 内の items が null のものを修復
-    for sec in data["sections"]:
-        if sec.get("items") is None:
-            sec["items"] = []
-
-    # ── UI 表示用の elements リストを sections から構築 ──
+    # ── UI表示用 elements リストをセクションブロックから構築 ──
     elements = []
-    for sec in data.get("sections", []):
-        for it in (sec.get("items") or []):
+    for block in data.get("blocks", []):
+        if block.get("type") != "section":
+            continue
+        for it in (block.get("items") or []):
             idx = len(elements)
             elements.append({
                 "id":      f"el_{idx:03d}",
@@ -613,89 +632,100 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
     CW = SLIDE_W - 0.70    # コンテンツ幅
     CH = SLIDE_H - 1.55    # コンテンツ高さ（フッター分を引く）
 
-    sections = data.get("sections") or []
-    tables   = data.get("tables") or []
+    blocks = data.get("blocks") or []
 
-    # ── 座標を一切使わない sections ベースのクリーンレイアウト ──
-    # AIには「何がどんな構造か」だけ聞き、配置はすべてコードが決める。
-
-    col1_secs = [s for s in sections if s.get("column", 1) != 2]
-    col2_secs = [s for s in sections if s.get("column", 1) == 2]
+    # ── ブロック分類 ──
+    sec_blocks = [b for b in blocks if b.get("type") == "section"]
+    col1_secs  = [b for b in sec_blocks if b.get("column", 1) != 2]
+    col2_secs  = [b for b in sec_blocks if b.get("column", 1) == 2]
     has_two_cols = bool(col2_secs) and not is_portrait
 
-    def count_rows(secs):
-        """セクション群の総行数（見出し行 + アイテム行）"""
+    def count_rows(secs: list) -> int:
+        """セクションリストの総行数（見出し行 + アイテム行）"""
         n = 0
         for sec in secs:
             if sec.get("heading"):
                 n += 1
-            n += len(sec.get("items", []))
+            n += len(sec.get("items") or [])
         return max(n, 1)
 
-    if has_two_cols:
-        col_w  = (CW - 0.30) / 2
-        n_rows = max(count_rows(col1_secs), count_rows(col2_secs))
-    else:
-        col_w  = CW
-        n_rows = count_rows(col1_secs + col2_secs)
-
-    # ── 統一フォントサイズ（行数から逆算）──
-    EL_H    = max(0.24, min(0.44, CH / n_rows))
+    # ── フォントサイズをセクション行数から逆算 ──
+    n_sec_rows = (max(count_rows(col1_secs), count_rows(col2_secs))
+                  if has_two_cols else count_rows(sec_blocks))
+    EL_H    = max(0.24, min(0.44, CH / max(n_sec_rows, 1)))
     base_pt = max(9, min(16, int(EL_H * 72 * 0.50)))
-    head_pt = min(base_pt + 3, 20)       # 見出し（heading type）
-    sec_pt  = min(base_pt + 5, 22)       # セクション見出し
+    head_pt = min(base_pt + 3, 20)
+    sec_pt  = min(base_pt + 5, 22)
 
-    def render_sections(secs, x_start, width):
-        y = CY
+    def render_item_at(item: dict, x_start: float, width: float, y: float) -> None:
+        """1アイテムを指定座標に描画する（y は呼び出し元が管理）"""
+        etype      = item.get("type", "text")
+        content    = item.get("text", "")
+        shape_type = item.get("shape", "none")
+        color      = resolve_color(item.get("color", "black"))
+        bold       = item.get("bold", False) or etype == "heading"
+        if shape_type in ("rect", "ellipse"):
+            shape_txt(s, shape_type, content,
+                      x_start + 0.05, y, width - 0.1, EL_H,
+                      size=base_pt, bold=bold, color=color)
+        elif etype == "heading":
+            txt(s, content, x_start, y, width, EL_H,
+                size=head_pt, bold=True, color=color)
+        elif etype == "arrow":
+            txt(s, f"→ {content}", x_start + 0.1, y, width - 0.1, EL_H,
+                size=base_pt, color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
+        elif etype == "bullet":
+            txt(s, f"・{content}", x_start + 0.1, y, width - 0.1, EL_H,
+                size=base_pt, bold=bold, color=color)
+        else:
+            txt(s, content, x_start + 0.1, y, width - 0.1, EL_H,
+                size=base_pt, bold=bold, color=color)
+
+    def render_section_list(secs: list, x_start: float, width: float,
+                            start_y: float = CY) -> float:
+        """セクションリストを描画し、終端 Y を返す"""
+        y = start_y
         for sec in secs:
             heading = sec.get("heading", "").strip()
-            items   = sec.get("items") or []
-
-            # セクション見出し（アンダーライン付き）
             if heading:
                 txt(s, heading, x_start, y, width, EL_H,
                     size=sec_pt, bold=True, color=C_WHITE, underline=True)
                 y += EL_H
-
-            for item in items:
-                etype      = item.get("type", "text")
-                content    = item.get("text", "")
-                shape_type = item.get("shape", "none")
-                color      = resolve_color(item.get("color", "black"))
-                bold       = item.get("bold", False) or etype == "heading"
-
-                if shape_type in ("rect", "ellipse"):
-                    shape_txt(s, shape_type, content,
-                              x_start + 0.05, y, width - 0.1, EL_H,
-                              size=base_pt, bold=bold, color=color)
-                elif etype == "heading":
-                    txt(s, content, x_start, y, width, EL_H,
-                        size=head_pt, bold=True, color=color)
-                elif etype == "arrow":
-                    txt(s, f"→ {content}", x_start + 0.1, y, width - 0.1, EL_H,
-                        size=base_pt, color=RGBColor(0xFF, 0xB7, 0x4D), italic=True)
-                elif etype == "bullet":
-                    txt(s, f"・{content}", x_start + 0.1, y, width - 0.1, EL_H,
-                        size=base_pt, bold=bold, color=color)
-                else:
-                    txt(s, content, x_start + 0.1, y, width - 0.1, EL_H,
-                        size=base_pt, bold=bold, color=color)
+            for item in (sec.get("items") or []):
+                if y >= CY + CH:
+                    break
+                render_item_at(item, x_start, width, y)
                 y += EL_H
+        return y
 
     if has_two_cols:
-        render_sections(col1_secs, CX,              col_w)
-        render_sections(col2_secs, CX + col_w + 0.30, col_w)
+        # ── 2列モード：左右セクションを並列描画、表はその後に順番通り ──
+        col_w = (CW - 0.30) / 2
+        render_section_list(col1_secs, CX,                col_w)
+        render_section_list(col2_secs, CX + col_w + 0.30, col_w)
+        # 表ブロックを2列コンテンツ下に続けて配置
+        tbl_y = CY + n_sec_rows * EL_H + 0.1
+        for b in blocks:
+            if b.get("type") != "table":
+                continue
+            if tbl_y >= CY + CH:
+                break
+            tbl_h = min(1.8, CY + CH - tbl_y)
+            add_table_shape(s, b, CX, tbl_y, max_w=CW, max_h=tbl_h)
+            tbl_y += tbl_h + 0.15
     else:
-        render_sections(col1_secs + col2_secs, CX, col_w)
-
-    # ─ 表を配置（コンテンツエリア末尾）─
-    tbl_y = CY + n_rows * EL_H + 0.1
-    for tbl_data in tables:
-        if tbl_y >= CY + CH:
-            break
-        tbl_h = min(1.8, CY + CH - tbl_y)
-        add_table_shape(s, tbl_data, CX, tbl_y, max_w=CW, max_h=tbl_h)
-        tbl_y += tbl_h + 0.1
+        # ── 1列モード：blocks を出現順に上から描画 ──
+        y = CY
+        for b in blocks:
+            if y >= CY + CH:
+                break
+            if b.get("type") == "section":
+                y = render_section_list([b], CX, CW, start_y=y)
+            elif b.get("type") == "table":
+                tbl_h = min(1.8, CY + CH - y)
+                if tbl_h > 0.3:
+                    add_table_shape(s, b, CX, y + 0.05, max_w=CW, max_h=tbl_h)
+                    y += tbl_h + 0.15
 
     # ─ フッター ─
     FOOTER_Y = SLIDE_H - 0.35
@@ -710,9 +740,7 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
 
 def generate_html(data: dict) -> bytes:
     """iPhone Safari でそのまま開けるHTMLを sections ベースで生成"""
-    title    = data.get("title", "メモ")
-    sections = data.get("sections") or []
-    tables   = data.get("tables") or []
+    title = data.get("title", "メモ")
     CMAP = {
         "black": "#1E1B4B", "white": "#6B7280", "red": "#DC2626",
         "blue": "#2563EB", "green": "#16A34A", "yellow": "#B45309",
@@ -764,30 +792,43 @@ def generate_html(data: dict) -> bytes:
             out += "</ul>"
         return out
 
-    body = ""
-    col1 = [s for s in sections if s.get("column", 1) != 2]
-    col2 = [s for s in sections if s.get("column", 1) == 2]
-    if col2:
-        body += "<div class='two-col'>"
-        body += "<div class='col'>" + "".join(render_section(s) for s in col1) + "</div>"
-        body += "<div class='col'>" + "".join(render_section(s) for s in col2) + "</div>"
-        body += "</div>"
-    else:
-        body = "".join(render_section(s) for s in col1)
-
-    # テーブル
-    for tbl in tables:
-        headers = tbl.get("headers", [])
-        trows   = tbl.get("rows", [])
+    def render_table_block(tbl: dict) -> str:
+        headers = tbl.get("headers") or []
+        trows   = tbl.get("rows") or []
         if not headers and not trows:
-            continue
-        body += "<table>"
+            return ""
+        out = "<table>"
         if headers:
-            body += "<tr>" + "".join(f"<th>{h}</th>" for h in headers) + "</tr>"
+            out += "<tr>" + "".join(f"<th>{h}</th>" for h in headers) + "</tr>"
         for i, row in enumerate(trows):
             cls = "even" if i % 2 == 0 else ""
-            body += f"<tr class='{cls}'>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>"
-        body += "</table>"
+            out += f"<tr class='{cls}'>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>"
+        out += "</table>"
+        return out
+
+    blocks = data.get("blocks") or []
+    col2_exists = any(b.get("column", 1) == 2
+                      for b in blocks if b.get("type") == "section")
+
+    if col2_exists:
+        # 2列モード：セクションを左右に分けて並列、表はその後に出現順
+        col1_secs = [b for b in blocks if b.get("type") == "section" and b.get("column", 1) != 2]
+        col2_secs = [b for b in blocks if b.get("type") == "section" and b.get("column", 1) == 2]
+        body  = "<div class='two-col'>"
+        body += "<div class='col'>" + "".join(render_section(s) for s in col1_secs) + "</div>"
+        body += "<div class='col'>" + "".join(render_section(s) for s in col2_secs) + "</div>"
+        body += "</div>"
+        for b in blocks:
+            if b.get("type") == "table":
+                body += render_table_block(b)
+    else:
+        # 1列モード：blocks 出現順にそのまま描画
+        body = ""
+        for b in blocks:
+            if b.get("type") == "section":
+                body += render_section(b)
+            elif b.get("type") == "table":
+                body += render_table_block(b)
 
     ts = datetime.now().strftime("%Y年%m月%d日 %H:%M")
     html = f"""<!DOCTYPE html>
@@ -1113,112 +1154,110 @@ if "extracted" in st.session_state:
         unsafe_allow_html=True)
     st.text_input("タイトル", key=title_key, label_visibility="collapsed")
 
-    # 各セクション・アイテム（色インジケーター付き）
-    edit_sections = extracted.get("sections") or []
-    global_idx = 0
-    for si, sec in enumerate(edit_sections):
-        sec_heading = (sec.get("heading") or "").strip()
-        if sec_heading:
-            col_lbl = 1 if sec.get("column", 1) != 2 else 2
-            st.markdown(
-                f"<p style='margin:0.8rem 0 0.2rem; font-size:0.85rem;"
-                f" color:#7C3AED; font-weight:700;'>── {sec_heading}"
-                f"（列{col_lbl}）</p>",
-                unsafe_allow_html=True)
-        for ii, item in enumerate(sec.get("items") or []):
-            etype   = item.get("type", "text")
-            shape   = item.get("shape", "none")
-            lbl     = SHAPE_LABEL.get(shape, "") + TYPE_LABEL.get(etype, "本文")
-            chex    = item_color_hex(global_idx)
-            ekey    = f"edit_{si}_{ii}"
-            if ekey not in st.session_state:
-                st.session_state[ekey] = item.get("text", "")
-            # 色付きラベル（■ + テキスト種別）
-            st.markdown(
-                f"<p style='font-size:0.88rem; font-weight:700; color:#1E1B4B;"
-                f" margin:0.6rem 0 0.1rem;'>"
-                f"<span style='display:inline-block; width:13px; height:13px;"
-                f" background:{chex}; border-radius:3px; margin-right:5px;"
-                f" vertical-align:middle;'></span>{lbl}</p>",
-                unsafe_allow_html=True)
-            st.text_input(lbl, key=ekey, label_visibility="collapsed")
-            global_idx += 1
+    # ── blocks を出現順に編集フォームとして表示 ──
+    edit_blocks = extracted.get("blocks") or []
+    global_idx  = 0   # アイテム全体を通した連番（色ラベル用）
+    tbl_count   = 0   # 表ブロックの通し番号
 
-    # ── 表の編集エリア ──
-    edit_tables = extracted.get("tables") or []
-    if edit_tables:
-        st.markdown(
-            "<p style='font-size:0.95rem; font-weight:800; color:#1E1B4B;"
-            " margin:1.2rem 0 0.3rem;'>📊 表</p>",
-            unsafe_allow_html=True)
-        for ti, tbl in enumerate(edit_tables):
-            headers  = list(tbl.get("headers") or [])
-            rows     = list(tbl.get("rows") or [])
-            n_cols   = max(len(headers), max((len(r) for r in rows), default=0))
+    for bi, block in enumerate(edit_blocks):
+        btype = block.get("type")
+
+        if btype == "section":
+            sec_heading = (block.get("heading") or "").strip()
+            if sec_heading:
+                col_lbl = 1 if block.get("column", 1) != 2 else 2
+                st.markdown(
+                    f"<p style='margin:0.8rem 0 0.2rem; font-size:0.85rem;"
+                    f" color:#7C3AED; font-weight:700;'>── {sec_heading}"
+                    f"（列{col_lbl}）</p>",
+                    unsafe_allow_html=True)
+            for ii, item in enumerate(block.get("items") or []):
+                etype = item.get("type", "text")
+                shape = item.get("shape", "none")
+                lbl   = SHAPE_LABEL.get(shape, "") + TYPE_LABEL.get(etype, "本文")
+                chex  = item_color_hex(global_idx)
+                ekey  = f"edit_b{bi}_i{ii}"
+                if ekey not in st.session_state:
+                    st.session_state[ekey] = item.get("text", "")
+                st.markdown(
+                    f"<p style='font-size:0.88rem; font-weight:700; color:#1E1B4B;"
+                    f" margin:0.6rem 0 0.1rem;'>"
+                    f"<span style='display:inline-block; width:13px; height:13px;"
+                    f" background:{chex}; border-radius:3px; margin-right:5px;"
+                    f" vertical-align:middle;'></span>{lbl}</p>",
+                    unsafe_allow_html=True)
+                st.text_input(lbl, key=ekey, label_visibility="collapsed")
+                global_idx += 1
+
+        elif btype == "table":
+            tbl_count += 1
+            headers = list(block.get("headers") or [])
+            rows    = list(block.get("rows") or [])
+            n_cols  = max(len(headers), max((len(r) for r in rows), default=0))
             if n_cols == 0:
                 continue
-            if len(edit_tables) > 1:
-                st.markdown(
-                    f"<p style='font-size:0.82rem; color:#7C3AED; font-weight:700;"
-                    f" margin:0.6rem 0 0.2rem;'>表 {ti + 1}</p>",
-                    unsafe_allow_html=True)
-            # ヘッダー行
+            st.markdown(
+                f"<p style='font-size:0.92rem; font-weight:800; color:#1E1B4B;"
+                f" margin:1.1rem 0 0.2rem;'>📊 表{tbl_count}</p>",
+                unsafe_allow_html=True)
             if headers:
                 st.markdown(
-                    "<p style='font-size:0.82rem; color:#6B7280; margin:0.4rem 0 0.1rem;'>"
-                    "ヘッダー行</p>",
+                    "<p style='font-size:0.82rem; color:#6B7280;"
+                    " margin:0.3rem 0 0.1rem;'>ヘッダー行</p>",
                     unsafe_allow_html=True)
                 h_cols = st.columns(n_cols)
                 for ci in range(n_cols):
-                    hkey = f"edit_tbl_{ti}_h_{ci}"
+                    hkey = f"edit_b{bi}_h{ci}"
                     if hkey not in st.session_state:
                         st.session_state[hkey] = headers[ci] if ci < len(headers) else ""
                     with h_cols[ci]:
                         st.text_input(f"H{ci+1}", key=hkey, label_visibility="collapsed")
-            # データ行
             for ri, row in enumerate(rows):
                 if ri == 0:
                     st.markdown(
-                        "<p style='font-size:0.82rem; color:#6B7280; margin:0.4rem 0 0.1rem;'>"
-                        "データ行</p>",
+                        "<p style='font-size:0.82rem; color:#6B7280;"
+                        " margin:0.3rem 0 0.1rem;'>データ行</p>",
                         unsafe_allow_html=True)
                 r_cols = st.columns(n_cols)
                 for ci in range(n_cols):
-                    rkey = f"edit_tbl_{ti}_r_{ri}_{ci}"
+                    rkey = f"edit_b{bi}_r{ri}_{ci}"
                     if rkey not in st.session_state:
                         st.session_state[rkey] = row[ci] if ci < len(row) else ""
                     with r_cols[ci]:
                         st.text_input(f"R{ri+1}C{ci+1}", key=rkey,
                                       label_visibility="collapsed")
 
-    # 作り直しボタン
+    # ── 作り直しボタン ──
     if st.button("この内容でスライドを作り直す",
                  type="secondary", use_container_width=True):
         edited = copy.deepcopy(extracted)
-        # タイトル更新
         edited["title"] = st.session_state.get("edit_title", edited.get("title", ""))
-        # 各アイテムのテキスト更新
-        for si, sec in enumerate(edited.get("sections") or []):
-            for ii, item in enumerate(sec.get("items") or []):
-                ekey = f"edit_{si}_{ii}"
-                if ekey in st.session_state:
-                    item["text"] = st.session_state[ekey]
-        # 表の更新
-        for ti, tbl in enumerate(edited.get("tables") or []):
-            headers = list(tbl.get("headers") or [])
-            for ci in range(len(headers)):
-                hkey = f"edit_tbl_{ti}_h_{ci}"
-                if hkey in st.session_state:
-                    tbl["headers"][ci] = st.session_state[hkey]
-            for ri, row in enumerate(tbl.get("rows") or []):
-                for ci in range(len(row)):
-                    rkey = f"edit_tbl_{ti}_r_{ri}_{ci}"
-                    if rkey in st.session_state:
-                        tbl["rows"][ri][ci] = st.session_state[rkey]
-        # elements リストを再構築
+
+        # blocks を session_state の値で上書き
+        for bi, block in enumerate(edited.get("blocks") or []):
+            if block.get("type") == "section":
+                for ii, item in enumerate(block.get("items") or []):
+                    ekey = f"edit_b{bi}_i{ii}"
+                    if ekey in st.session_state:
+                        item["text"] = st.session_state[ekey]
+            elif block.get("type") == "table":
+                headers = list(block.get("headers") or [])
+                for ci in range(len(headers)):
+                    hkey = f"edit_b{bi}_h{ci}"
+                    if hkey in st.session_state:
+                        block["headers"][ci] = st.session_state[hkey]
+                for ri, row in enumerate(block.get("rows") or []):
+                    for ci in range(len(row)):
+                        rkey = f"edit_b{bi}_r{ri}_{ci}"
+                        if rkey in st.session_state:
+                            block["rows"][ri][ci] = st.session_state[rkey]
+
+        # elements リストをセクションブロックから再構築
         new_elements = []
-        for sec in edited.get("sections", []):
-            for it in (sec.get("items") or []):
+        for block in edited.get("blocks", []):
+            if block.get("type") != "section":
+                continue
+            for it in (block.get("items") or []):
                 idx = len(new_elements)
                 new_elements.append({
                     "id": f"el_{idx:03d}", "type": it.get("type", "text"),
@@ -1228,7 +1267,7 @@ if "extracted" in st.session_state:
                     "confidence": 1.0,
                 })
         edited["elements"] = new_elements
-        # 再生成
+
         ip = st.session_state.get("_is_portrait", False)
         st.session_state["extracted"]  = edited
         st.session_state["pptx_bytes"] = generate_pptx(edited, is_portrait=ip)
