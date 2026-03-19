@@ -172,7 +172,7 @@ button, a { touch-action: manipulation; -webkit-appearance: none; }
     text-align: center;
 }
 [data-testid="stFileUploaderDropzoneInstructions"]::after {
-    content: "対応形式：JPG・PNG・WebP　最大20MBまで";
+    content: "対応形式：JPG・PNG・WebP・PDF　最大20MBまで";
     display: block;
     font-size: 0.85rem;
     color: #8B5CF6;
@@ -229,6 +229,27 @@ def remove_shadows(img: Image.Image) -> Image.Image:
     norm   = arr / (blur / 160.0 + 0.5)
     norm   = np.clip(norm, 0, 255).astype(np.uint8)
     return Image.fromarray(norm)
+
+
+def get_pdf_info(file_bytes: bytes) -> int:
+    """PDFのページ数を返す"""
+    import fitz  # PyMuPDF
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    count = doc.page_count
+    doc.close()
+    return count
+
+
+def pdf_page_to_pil(file_bytes: bytes, page_num: int = 0) -> Image.Image:
+    """PDFの指定ページを PIL Image（RGB）に変換（2倍解像度）"""
+    import fitz
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    page = doc[page_num]
+    mat = fitz.Matrix(2.0, 2.0)        # 2×ズームで解像度を確保
+    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    doc.close()
+    return img
 
 
 def preprocess_image(img: Image.Image,
@@ -825,14 +846,14 @@ st.markdown(
     "<div class='step'><span class='snum'>１</span>写真を選ぶ</div>",
     unsafe_allow_html=True)
 st.markdown(
-    "<div class='hint'>ホワイトボードやメモ帳の写真を選ぶだけ。あとはAIがきれいに仕上げます。</div>",
+    "<div class='hint'>ホワイトボード・メモ帳の写真や、スキャンしたPDFを選ぶだけ。あとはAIがきれいに仕上げます。</div>",
     unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader(
     "画像ファイルを選ぶ",
-    type=["jpg", "jpeg", "png", "webp"],
+    type=["jpg", "jpeg", "png", "webp", "pdf"],
     label_visibility="collapsed",
-    help="JPG・PNG・WebP 形式の画像に対応しています。",
+    help="JPG・PNG・WebP・PDF 形式に対応しています。",
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -846,6 +867,29 @@ is_portrait = st.session_state.get("_is_portrait", False)
 if uploaded_file:
     st.markdown("---")
 
+    is_pdf = uploaded_file.name.lower().endswith(".pdf")
+
+    # ── PDF：ページ選択 ──
+    pdf_page_num = 0
+    if is_pdf:
+        try:
+            raw_bytes  = uploaded_file.getvalue()
+            page_count = get_pdf_info(raw_bytes)
+            if page_count > 1:
+                st.markdown(
+                    f"<div class='hint'>このPDFは <strong>{page_count} ページ</strong> あります。"
+                    "変換するページを選んでください。</div>",
+                    unsafe_allow_html=True)
+                pdf_page_num = st.number_input(
+                    "ページ番号",
+                    min_value=1, max_value=page_count, value=1, step=1,
+                    help=f"1〜{page_count} の範囲で選べます",
+                ) - 1   # 0-indexed に変換
+            else:
+                st.caption("PDF（1ページ）を読み込みました")
+        except Exception as pdf_info_err:
+            st.error(f"PDFの読み込みに失敗しました。（{pdf_info_err}）")
+
     do_trim = st.toggle(
         "余白を自動カット（おすすめ）",
         value=True,
@@ -858,12 +902,23 @@ if uploaded_file:
     )
 
     try:
-        file_bytes = uploaded_file.getvalue()   # ファイル全体をバイト列で取得
-        file_id    = f"{uploaded_file.name}_{len(file_bytes)}"
+        file_bytes = uploaded_file.getvalue()
+
+        # PDF の場合は先にページを画像に変換してから処理
+        if is_pdf:
+            pil_from_pdf = pdf_page_to_pil(file_bytes, page_num=pdf_page_num)
+            buf_for_cache = io.BytesIO()
+            pil_from_pdf.save(buf_for_cache, format="JPEG", quality=95)
+            proc_bytes = buf_for_cache.getvalue()
+        else:
+            proc_bytes = file_bytes
+
+        # キャッシュキー：ファイル名＋サイズ（＋PDFならページ番号も含める）
+        file_id = f"{uploaded_file.name}_{len(file_bytes)}_p{pdf_page_num}"
 
         # キャッシュ済み処理（同一ファイル＋設定ならリランしても即返却）
         img_data, media_type, is_portrait, preview_bytes = cached_process_image(
-            file_bytes, do_trim, do_shadow
+            proc_bytes, do_trim, do_shadow
         )
 
         # ファイルが変わったら前の変換結果をリセット
@@ -878,12 +933,13 @@ if uploaded_file:
         st.session_state["_is_portrait"] = is_portrait
 
         orient_label = "縦（ポートレート）" if is_portrait else "横（ランドスケープ）"
+        cap_label    = "変換するページ" if is_pdf else "変換する写真"
         st.caption(f"スライド向き：{orient_label} で出力します")
         st.image(Image.open(io.BytesIO(preview_bytes)),
-                 caption="変換する写真", use_container_width=True)
+                 caption=cap_label, use_container_width=True)
 
     except Exception as img_err:
-        st.error(f"画像の読み込みに失敗しました。別の画像をお試しください。\n（{img_err}）")
+        st.error(f"ファイルの読み込みに失敗しました。別のファイルをお試しください。\n（{img_err}）")
         img_data = None
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
