@@ -340,20 +340,67 @@ def item_color_hex(global_idx: int) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def detect_text_rows(img: Image.Image) -> list[int]:
+    """水平投影でテキスト行の中心 Y 座標リストを返す（ピクセル単位）。
+    autocontrast 済みの画像を想定しており、暗ピクセル密度の高い
+    連続した行グループをテキスト行として検出する。
+    """
+    import numpy as np
+    gray    = np.array(img.convert("L"), dtype=np.float32)
+    H, W    = gray.shape
+    # 画像の平均輝度の 78% より暗い画素をテキスト候補とみなす
+    thresh  = float(gray.mean()) * 0.78
+    density = (gray < thresh).mean(axis=1)   # 各行の暗ピクセル割合
+
+    MIN_DENSITY = 0.008   # この密度以上の行をテキスト行とする
+    is_text     = density > MIN_DENSITY
+
+    # 連続したテキスト行をグループ化して中心 Y を求める
+    lines, in_group, start = [], False, 0
+    for y in range(H):
+        if is_text[y] and not in_group:
+            in_group, start = True, y
+        elif not is_text[y] and in_group:
+            in_group = False
+            lines.append((start + y - 1) // 2)
+    if in_group:
+        lines.append((start + H - 1) // 2)
+    return lines
+
+
+def snap_y_to_line(y_pct: int, H: int, text_lines: list[int]) -> int:
+    """AIが推定した y_pct を最も近いテキスト行にスナップする。
+    最寄りの行が画像高さの 12% 以上離れている場合はスナップしない。
+    """
+    if not text_lines:
+        return y_pct
+    y_px    = int(H * y_pct / 100)
+    nearest = min(text_lines, key=lambda ly: abs(ly - y_px))
+    if abs(nearest - y_px) <= H * 0.12:
+        return max(0, min(100, int(nearest * 100 / H)))
+    return y_pct
+
+
 def build_annotated_image(preview_bytes: bytes, data: dict) -> bytes:
     """各アイテムの位置に色帯オーバーレイを描画した画像を返す。
     左端に不透明バー、全幅に薄い帯を重ねることで
     フォームの色インジケーターとの対応を視覚的に示す。
+    y_pct は画像解析で検出したテキスト行位置にスナップして精度を向上させる。
     """
     from PIL import ImageDraw
 
-    img  = Image.open(io.BytesIO(preview_bytes)).convert("RGBA")
-    W, H = img.size
+    base_img = Image.open(io.BytesIO(preview_bytes)).convert("RGB")
+    W, H     = base_img.size
+
+    # ── テキスト行を検出してスナップ用リストを作成 ──
+    text_lines = detect_text_rows(base_img)
+
+    img     = base_img.convert("RGBA")
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw    = ImageDraw.Draw(overlay)
 
-    band_h = max(8, H // 45)      # 帯の高さ
-    side_w = max(20, W // 35)     # 左端インジケーター幅
+    band_h  = max(8, H // 45)
+    side_w  = max(20, W // 35)
     MIN_GAP = band_h + 2
     last_cy = -MIN_GAP
 
@@ -370,16 +417,18 @@ def build_annotated_image(preview_bytes: bytes, data: dict) -> bytes:
         yp = item.get("y_pct")
         if yp is None:
             yp = int(100 * (idx + 0.5) / max(total, 1))
+
+        # テキスト行にスナップ（ずれを補正）
+        yp = snap_y_to_line(yp, H, text_lines)
+
         cy = max(band_h + 2, min(H - band_h - 2, int(H * yp / 100)))
         cy = max(cy, last_cy + MIN_GAP)
         last_cy = cy
 
         y0, y1 = cy - band_h // 2, cy + band_h // 2
 
-        # 全幅：薄い透明帯（識別しやすいが文字を隠さない）
-        draw.rectangle([0, y0, W, y1], fill=(r, g, b, 55))
-        # 左端：不透明インジケーターバー
-        draw.rectangle([0, y0, side_w, y1], fill=(r, g, b, 230))
+        draw.rectangle([0, y0, W, y1],       fill=(r, g, b, 55))   # 全幅・薄い帯
+        draw.rectangle([0, y0, side_w, y1],  fill=(r, g, b, 230))  # 左端・不透明バー
 
     img = Image.alpha_composite(img, overlay).convert("RGB")
     buf = io.BytesIO()
