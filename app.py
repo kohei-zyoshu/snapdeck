@@ -368,7 +368,7 @@ STEP3: 出現順に blocks 配列へ記録する。
 - table の headers: 見出し行がない場合は []
 - 画像内のすべての文字を漏れなく・正確に読む（推測・省略・合体禁止）
 - 読み取れなかった・自信のない文字は [?] で示す（例: "田中[?]"、"合計[?]円"）
-- JSONのみ返す（説明文・コードブロック・改行コード不要）"""
+- 必ず { で始まる JSONのみ返す（説明文・コードブロック・前置き不要）"""
 
 
 def _parse_json_response(raw: str) -> dict:
@@ -441,11 +441,9 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str,
                 }},
                 {"type": "text", "text": EXTRACTION_PROMPT},
             ]},
-            {"role": "assistant", "content": "{"},  # prefill: { から即始める
         ]
     )
-    # prefill した { を補って完全なJSONにする
-    raw = "{" + message.content[0].text.strip()
+    raw = message.content[0].text.strip()
 
     data = _parse_json_response(raw)
     data = _normalize_blocks(data)
