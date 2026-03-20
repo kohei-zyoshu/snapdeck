@@ -1035,8 +1035,8 @@ if not uploaded_file:
 
 # ── モデル選択（コスト vs 精度） ──
 MODEL_OPTIONS = {
-    "高精度（おすすめ）　約3円/回": "claude-sonnet-4-6",
-    "省エネ　約0.3円/回": "claude-haiku-4-5-20251001",
+    "高精度（おすすめ）　約4円/回": "claude-sonnet-4-6",
+    "省エネ・高速　約1円/回": "claude-haiku-4-5-20251001",
 }
 selected_model_label = st.radio(
     "読み取りモード",
