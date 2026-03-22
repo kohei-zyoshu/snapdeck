@@ -552,6 +552,87 @@ def verify_extraction(img_data: str, media_type: str, api_key: str,
     return out
 
 
+REREAD_PROMPT = """この画像から以下のテキストが読み取られましたが、一部の文字が不確かです。
+画像を注意深く見て、各テキストを正確に読み直してください。
+
+【再読み取りリスト】
+{items_json}
+
+【返却形式】
+[{{"idx":0,"text":"正確なテキスト"}},{{"idx":1,"text":"正確なテキスト"}},...]
+
+- 元の読み取り結果より画像内の実際の文字を優先する
+- [?] の部分は読み取れた文字で補完する（読めなければそのまま残す）
+- JSONのみ返す（説明文不要）"""
+
+
+def reread_uncertain(img_data: str, media_type: str, api_key: str,
+                     data: dict, verification: dict,
+                     model: str = "claude-sonnet-4-6") -> dict:
+    """🟡/🔴 の項目のみ高精度モデルで再読み取りする。
+
+    コスト最小化のポイント:
+    - 不確かな箇所のテキストリストのみ送信（出力トークン数が極小）
+    - 全体の再解析ではなく差分のみ修正
+    戻り値: {(bi, ii): "修正後テキスト"}
+    """
+    import anthropic
+
+    # 🟡/🔴 の項目だけを対象にする
+    targets: list[dict] = []
+    for (bi, ii), v in verification.items():
+        if v.get("confidence") not in ("medium", "low"):
+            continue
+        blks = data.get("blocks") or []
+        if bi < len(blks):
+            items = blks[bi].get("items") or []
+            if ii < len(items):
+                targets.append({
+                    "idx": len(targets), "bi": bi, "ii": ii,
+                    "text": items[ii].get("text", ""),
+                    "confidence": v["confidence"],
+                })
+
+    if not targets:
+        return {}
+
+    items_for_prompt = [
+        {"idx": t["idx"], "text": t["text"],
+         "note": "low" if t["confidence"] == "low" else "medium"}
+        for t in targets
+    ]
+    prompt = REREAD_PROMPT.format(
+        items_json=json.dumps(items_for_prompt, ensure_ascii=False))
+
+    client  = anthropic.Anthropic(api_key=api_key)
+    message = client.messages.create(
+        model=model,
+        max_tokens=1000,    # 出力は短いテキストリストのみ
+        temperature=0,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {
+                "type": "base64", "media_type": media_type, "data": img_data
+            }},
+            {"type": "text", "text": prompt},
+        ]}],
+    )
+    raw  = message.content[0].text.strip()
+    text = re.sub(r"```(?:json)?\s*", "", raw)
+    text = re.sub(r"```", "", text).strip()
+    ls   = text.find("[")
+    le   = text.rfind("]")
+    if ls == -1 or le == -1:
+        return {}
+    try:
+        results: list[dict] = json.loads(text[ls:le + 1])
+    except json.JSONDecodeError:
+        return {}
+
+    idx_map = {t["idx"]: (t["bi"], t["ii"]) for t in targets}
+    return {idx_map[r["idx"]]: r["text"]
+            for r in results if r.get("idx") in idx_map and r.get("text")}
+
+
 def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
     """解析データからパワーポイントを生成（縦横自動対応）"""
     from pptx import Presentation
@@ -1259,7 +1340,9 @@ if "extracted" in st.session_state:
                         st.success("精度チェック完了：すべて高信頼度です。")
                     else:
                         st.warning(
-                            f"精度チェック完了：🔴 要確認 {low_cnt}件　🟡 やや不確か {medium_cnt}件")
+                            f"精度チェック完了：🔴 要確認 {low_cnt}件　"
+                            f"🟡 やや不確か {medium_cnt}件　"
+                            f"→ 下の「再読み取り」ボタンで修正できます")
                     # 修正案がある項目を session_state に反映（上書き確認は UI 側で）
                     for (bi, ii), v in vr.items():
                         if v.get("correction"):
@@ -1280,6 +1363,47 @@ if "extracted" in st.session_state:
                     st.error(f"検証エラー: {ex}")
 
     verification = st.session_state.get("verification", {})
+
+    # ── 該当箇所だけ高精度モデルで再読み取り ──
+    uncertain_cnt = sum(1 for v in verification.values()
+                        if v.get("confidence") in ("medium", "low"))
+    if verification and uncertain_cnt > 0:
+        rr_model_map = {
+            f"Sonnet（高精度）　約1円": "claude-sonnet-4-6",
+        }
+        rr_model_lbl = st.selectbox(
+            "再読み取りモデル", list(rr_model_map.keys()),
+            label_visibility="collapsed")
+        rr_model = rr_model_map[rr_model_lbl]
+        if st.button(
+                f"✨ 不確かな {uncertain_cnt} 件だけ高精度で再読み取り",
+                type="primary", use_container_width=True):
+            api_key_r  = get_api_key()
+            img_data_r = st.session_state.get("_img_data")
+            media_r    = st.session_state.get("_media_type", "image/jpeg")
+            if not api_key_r or not img_data_r:
+                st.warning("APIキーまたは画像データがありません。")
+            else:
+                with st.spinner(f"高精度モデルで {uncertain_cnt} 件を再読み取り中…"):
+                    try:
+                        corrections = reread_uncertain(
+                            img_data_r, media_r, api_key_r,
+                            extracted, verification, model=rr_model)
+                        fixed = 0
+                        for (bi, ii), new_text in corrections.items():
+                            ekey = f"edit_b{bi}_i{ii}"
+                            if new_text and st.session_state.get(ekey) != new_text:
+                                st.session_state[ekey] = new_text
+                                # 検証結果も high に更新
+                                if (bi, ii) in st.session_state["verification"]:
+                                    st.session_state["verification"][(bi, ii)][
+                                        "confidence"] = "high"
+                                fixed += 1
+                        st.success(f"{fixed} 件を修正しました。"
+                                   "「作り直す」で反映してください。")
+                    except Exception as ex:
+                        st.error(f"再読み取りエラー: {ex}")
+        st.markdown("---")
 
     # ── blocks を出現順に編集フォームとして表示 ──
     edit_blocks = extracted.get("blocks") or []
