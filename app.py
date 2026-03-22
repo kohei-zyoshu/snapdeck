@@ -471,6 +471,87 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str,
     return data
 
 
+VERIFY_PROMPT = """この画像から以下のテキストが自動抽出されました。
+元の画像と1件ずつ照合し、識字精度を評価してください。
+
+【抽出テキスト一覧】
+{items_json}
+
+【返却形式】
+[{{"idx":0,"confidence":"high","correction":null}},{{"idx":1,"confidence":"medium","correction":"修正後テキスト"}},...]
+
+confidence:
+- "high"  … 正確に読み取れている
+- "medium" … やや不確か、別の読み方の可能性あり
+- "low"   … 誤読の可能性が高い
+
+correction: 修正後テキスト（high の場合は null、[?] を含む場合は補完案を記載）
+JSONのみ返す（説明文不要）。"""
+
+
+def verify_extraction(img_data: str, media_type: str, api_key: str,
+                      data: dict) -> dict:
+    """抽出結果を元画像と照合して識字精度を評価する（常に Haiku を使用）。
+
+    戻り値: {(bi, ii): {"confidence": "high"|"medium"|"low", "correction": str|None}}
+    """
+    import anthropic
+
+    # section ブロックのアイテムを番号付きリストに展開
+    items: list[dict] = []
+    for bi, block in enumerate(data.get("blocks") or []):
+        if block.get("type") != "section":
+            continue
+        for ii, item in enumerate(block.get("items") or []):
+            items.append({"idx": len(items), "bi": bi, "ii": ii,
+                          "text": item.get("text", "")})
+
+    if not items:
+        return {}
+
+    items_for_prompt = [{"idx": it["idx"], "text": it["text"]} for it in items]
+    prompt = VERIFY_PROMPT.format(
+        items_json=json.dumps(items_for_prompt, ensure_ascii=False))
+
+    client  = anthropic.Anthropic(api_key=api_key)
+    message = client.messages.create(
+        model="claude-haiku-4-5-20251001",   # 速さ重視・コスト最小
+        max_tokens=2000,
+        temperature=0,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {
+                "type": "base64", "media_type": media_type, "data": img_data
+            }},
+            {"type": "text", "text": prompt},
+        ]}],
+    )
+    raw = message.content[0].text.strip()
+
+    # JSON 配列を抽出
+    text = re.sub(r"```(?:json)?\s*", "", raw)
+    text = re.sub(r"```", "", text).strip()
+    ls   = text.find("[")
+    le   = text.rfind("]")
+    if ls == -1 or le == -1:
+        return {}
+    try:
+        results: list[dict] = json.loads(text[ls:le + 1])
+    except json.JSONDecodeError:
+        return {}
+
+    # idx → (bi, ii) のマッピング
+    idx_map = {it["idx"]: (it["bi"], it["ii"]) for it in items}
+    out: dict = {}
+    for r in results:
+        key = idx_map.get(r.get("idx"))
+        if key is not None:
+            out[key] = {
+                "confidence": r.get("confidence", "medium"),
+                "correction": r.get("correction"),
+            }
+    return out
+
+
 def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
     """解析データからパワーポイントを生成（縦横自動対応）"""
     from pptx import Presentation
@@ -1154,6 +1235,52 @@ if "extracted" in st.session_state:
         unsafe_allow_html=True)
     st.text_input("タイトル", key=title_key, label_visibility="collapsed")
 
+    # ── 精度チェックボタン ──
+    _VF_BADGE = {
+        "high":   ("🟢", "#16A34A", "正確"),
+        "medium": ("🟡", "#CA8A04", "やや不確か"),
+        "low":    ("🔴", "#DC2626", "誤読の可能性あり"),
+    }
+    if st.button("🔍 識字精度を確認する（約1円）",
+                 type="secondary", use_container_width=True):
+        api_key_v = get_api_key()
+        img_data_v = st.session_state.get("_img_data")
+        media_v    = st.session_state.get("_media_type", "image/jpeg")
+        if not api_key_v or not img_data_v:
+            st.warning("APIキーまたは画像データがありません。")
+        else:
+            with st.spinner("AIが識字精度を検証中です…"):
+                try:
+                    vr = verify_extraction(img_data_v, media_v, api_key_v, extracted)
+                    st.session_state["verification"] = vr
+                    low_cnt    = sum(1 for v in vr.values() if v["confidence"] == "low")
+                    medium_cnt = sum(1 for v in vr.values() if v["confidence"] == "medium")
+                    if low_cnt == 0 and medium_cnt == 0:
+                        st.success("精度チェック完了：すべて高信頼度です。")
+                    else:
+                        st.warning(
+                            f"精度チェック完了：🔴 要確認 {low_cnt}件　🟡 やや不確か {medium_cnt}件")
+                    # 修正案がある項目を session_state に反映（上書き確認は UI 側で）
+                    for (bi, ii), v in vr.items():
+                        if v.get("correction"):
+                            ekey = f"edit_b{bi}_i{ii}"
+                            # 未編集の場合のみ自動反映
+                            orig = ""
+                            for bk in (extracted.get("blocks") or []):
+                                if bk.get("type") == "section":
+                                    pass
+                            blocks_tmp = extracted.get("blocks") or []
+                            if bi < len(blocks_tmp):
+                                items_tmp = blocks_tmp[bi].get("items") or []
+                                if ii < len(items_tmp):
+                                    orig = items_tmp[ii].get("text", "")
+                            if st.session_state.get(ekey, orig) == orig:
+                                st.session_state[ekey] = v["correction"]
+                except Exception as ex:
+                    st.error(f"検証エラー: {ex}")
+
+    verification = st.session_state.get("verification", {})
+
     # ── blocks を出現順に編集フォームとして表示 ──
     edit_blocks = extracted.get("blocks") or []
     global_idx  = 0   # アイテム全体を通した連番（色ラベル用）
@@ -1179,12 +1306,23 @@ if "extracted" in st.session_state:
                 ekey  = f"edit_b{bi}_i{ii}"
                 if ekey not in st.session_state:
                     st.session_state[ekey] = item.get("text", "")
+
+                # 精度バッジ（検証済みの場合）
+                vinfo = verification.get((bi, ii))
+                badge_html = ""
+                if vinfo:
+                    icon, col, tip = _VF_BADGE.get(
+                        vinfo["confidence"], ("🟡", "#CA8A04", ""))
+                    badge_html = (
+                        f"<span style='font-size:0.78rem; color:{col};"
+                        f" font-weight:700; margin-left:6px;'>{icon} {tip}</span>")
+
                 st.markdown(
                     f"<p style='font-size:0.88rem; font-weight:700; color:#1E1B4B;"
                     f" margin:0.6rem 0 0.1rem;'>"
                     f"<span style='display:inline-block; width:13px; height:13px;"
                     f" background:{chex}; border-radius:3px; margin-right:5px;"
-                    f" vertical-align:middle;'></span>{lbl}</p>",
+                    f" vertical-align:middle;'></span>{lbl}{badge_html}</p>",
                     unsafe_allow_html=True)
                 st.text_input(lbl, key=ekey, label_visibility="collapsed")
                 global_idx += 1
