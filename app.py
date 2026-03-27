@@ -356,7 +356,7 @@ STEP3: 出現順に blocks 配列へ記録する。
   ・2列構成なら左側を column:1、右側を column:2 とする
 
 【返却JSON形式】
-"title":"タイトル","blocks":[{"type":"section","heading":"見出し（なければ空文字）","column":1,"items":[{"text":"大見出し","type":"heading","shape":"none","color":"black","bold":true},{"text":"箇条書き","type":"bullet","shape":"none","color":"black","bold":false},{"text":"四角囲み","type":"text","shape":"rect","color":"red","bold":false},{"text":"丸囲み","type":"text","shape":"ellipse","color":"blue","bold":false},{"text":"矢印","type":"arrow","shape":"none","color":"black","bold":false}]},{"type":"table","headers":["列1","列2"],"rows":[["値1","値2"]]}]}
+"title":"タイトル","blocks":[{"type":"section","heading":"見出し（なければ空文字）","column":1,"items":[{"text":"大見出し","type":"heading","shape":"none","color":"black","bold":true,"x_pct":25,"y_pct":10},{"text":"箇条書き","type":"bullet","shape":"none","color":"black","bold":false,"x_pct":25,"y_pct":25}]},{"type":"table","headers":["列1","列2"],"rows":[["値1","値2"]]}]}
 
 【必須ルール】
 - title はスライドヘッダー専用（blocks の items に含めない）
@@ -365,6 +365,9 @@ STEP3: 出現順に blocks 配列へ記録する。
 - type: heading / bullet / text / arrow
 - shape: rect（四角囲み）/ ellipse（丸囲み）/ none（囲みなし）
 - color: black / red / blue / green / orange / purple / pink / gray / brown / yellow
+- x_pct: そのテキスト・付箋の中心が画像左端から何%の位置か（0〜100の整数）
+- y_pct: そのテキスト・付箋の中心が画像上端から何%の位置か（0〜100の整数）
+- bg_color: 付箋・カードの背景色（yellow/pink/blue/green/orange/purple/white/none）。付箋でない場合は "none"
 - table の headers: 見出し行がない場合は []
 - 画像内のすべての文字を漏れなく・正確に読む（推測・省略・合体禁止）
 - 読み取れなかった・自信のない文字は [?] で示す（例: "田中[?]"、"合計[?]円"）
@@ -392,8 +395,14 @@ def _normalize_blocks(data: dict) -> dict:
     # ── 新フォーマット（blocks あり）の正規化 ──
     if data.get("blocks"):
         for b in data["blocks"]:
-            if b.get("type") == "section" and b.get("items") is None:
-                b["items"] = []
+            if b.get("type") == "section":
+                if b.get("items") is None:
+                    b["items"] = []
+                for item in b["items"]:
+                    for key in ("x_pct", "y_pct"):
+                        v = item.get(key)
+                        if v is not None:
+                            item[key] = max(0, min(100, int(v)))
         return data
 
     # ── 旧フォーマット（sections + tables）→ blocks に変換 ──
@@ -899,6 +908,277 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
     buf = io.BytesIO()
     prs.save(buf)
     return buf.getvalue()
+
+
+# ── ポストイット SVG パレット（セクション単位で色を割り当て）──
+_STICKY_PALETTE = [
+    ("#FFF9C4", "#F9A825"),  # yellow
+    ("#FCE4EC", "#E91E63"),  # pink
+    ("#E3F2FD", "#1565C0"),  # blue
+    ("#E8F5E9", "#2E7D32"),  # green
+    ("#FBE9E7", "#BF360C"),  # orange
+    ("#EDE7F6", "#4527A0"),  # purple
+    ("#E0F7FA", "#006064"),  # teal
+    ("#FFF3E0", "#E65100"),  # amber
+    ("#FAFAFA", "#616161"),  # gray
+    ("#F3E5F5", "#6A1B9A"),  # deep purple
+    ("#E8EAF6", "#283593"),  # indigo
+    ("#E0F2F1", "#004D40"),  # deep teal
+]
+
+
+def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
+    """ホワイトボード・ポストイットの内容をFigmaで編集可能なSVGとして出力する。
+
+    x_pct / y_pct が設定されている場合は元の空間配置を再現（空間モード）。
+    ない場合はセクション単位のグリッドレイアウトにフォールバック。
+    各付箋は <g id="item-{bi}-{ii}"> で独立したレイヤーになるためFigmaで個別編集可能。
+    """
+    import io as _io
+
+    # ── キャンバスサイズ（画像のアスペクト比に合わせる）──
+    CANVAS_W = 1200
+    if preview_bytes:
+        try:
+            _pil = Image.open(_io.BytesIO(preview_bytes))
+            CANVAS_H = int(CANVAS_W * _pil.height / _pil.width)
+        except Exception:
+            CANVAS_H = 900
+    else:
+        CANVAS_H = 900
+
+    STICKY_W  = 180
+    STICKY_H  = 108
+    GAP       = 14
+    SEC_PAD   = 20
+    SEC_HDR_H = 32
+    SEC_GAP   = 28
+    PAGE_PAD  = 48
+    INNER_W   = CANVAS_W - PAGE_PAD * 2
+
+    # 実物のポストイット色 → SVG fill/stroke マッピング
+    _BG_MAP = {
+        "yellow": ("#FFF9C4", "#F9A825"),
+        "pink":   ("#FCE4EC", "#E91E63"),
+        "red":    ("#FFEBEE", "#C62828"),
+        "blue":   ("#E3F2FD", "#1565C0"),
+        "green":  ("#E8F5E9", "#2E7D32"),
+        "orange": ("#FFF3E0", "#E65100"),
+        "purple": ("#EDE7F6", "#4527A0"),
+        "white":  ("#FFFFFF", "#9E9E9E"),
+        "gray":   ("#FAFAFA", "#616161"),
+        "brown":  ("#EFEBE9", "#4E342E"),
+    }
+
+    def item_colors(item: dict, sec_idx: int) -> tuple[str, str]:
+        """bg_color フィールドがあれば実物色を使い、なければパレットから割り当て"""
+        bg = (item.get("bg_color") or "none").lower()
+        if bg in _BG_MAP:
+            return _BG_MAP[bg]
+        return _STICKY_PALETTE[sec_idx % len(_STICKY_PALETTE)]
+
+    def esc(t: str) -> str:
+        return (str(t).replace("&", "&amp;").replace("<", "&lt;")
+                      .replace(">", "&gt;").replace('"', "&quot;"))
+
+    def text_lines(text: str, max_ch: int = 18) -> list[str]:
+        t, lines = str(text), []
+        while t:
+            lines.append(t[:max_ch])
+            t = t[max_ch:]
+            if len(lines) >= 4:
+                if t:
+                    lines[-1] = lines[-1][:-1] + "…"
+                break
+        return lines
+
+    def svg_sticky(cx: float, cy: float, text: str,
+                   fill: str, stroke: str, item_id: str) -> str:
+        x      = cx - STICKY_W / 2
+        y      = cy - STICKY_H / 2
+        lines  = text_lines(text)
+        LH     = 17
+        ty0    = cy - (len(lines) - 1) * LH / 2
+        rect   = (f'<rect x="{x:.1f}" y="{y:.1f}" width="{STICKY_W}" height="{STICKY_H}"'
+                  f' rx="8" fill="{fill}" stroke="{stroke}" stroke-width="1.5"'
+                  f' filter="url(#dropshadow)"/>\n')
+        txts   = "".join(
+            f'<text x="{cx:.1f}" y="{ty0 + i * LH:.1f}" font-size="12" fill="#333333"'
+            f' text-anchor="middle" dominant-baseline="central"'
+            f' font-family="system-ui,-apple-system,sans-serif">{esc(ln)}</text>\n'
+            for i, ln in enumerate(lines)
+        )
+        return f'<g id="{item_id}">\n{rect}{txts}</g>\n'
+
+    def svg_table(tbl: dict, x0: float, y0: float,
+                  width: float, tbl_id: str) -> tuple[str, float]:
+        headers = tbl.get("headers") or []
+        rows    = tbl.get("rows") or []
+        n_cols  = max(len(headers), max((len(r) for r in rows), default=0))
+        if n_cols == 0:
+            return "", 0
+        col_w   = width / n_cols
+        RH, HH  = 36, 40
+        svg     = ""
+        cy      = y0
+        # 外枠
+        total_h = (HH if headers else 0) + len(rows) * RH
+        svg += (f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{width:.1f}"'
+                f' height="{total_h}" fill="none" stroke="#CBD5E1"'
+                f' stroke-width="1" rx="4"/>\n')
+        if headers:
+            svg += (f'<rect x="{x0:.1f}" y="{cy:.1f}" width="{width:.1f}"'
+                    f' height="{HH}" fill="#E3E8EF" rx="4"/>\n')
+            for ci, h in enumerate(headers[:n_cols]):
+                tx = x0 + ci * col_w + col_w / 2
+                svg += (f'<text x="{tx:.1f}" y="{cy + HH/2:.1f}" font-size="13"'
+                        f' font-weight="bold" fill="#1E293B" text-anchor="middle"'
+                        f' dominant-baseline="central"'
+                        f' font-family="system-ui,-apple-system,sans-serif">{esc(h)}</text>\n')
+            cy += HH
+        for ri, row in enumerate(rows):
+            bg = "#F8FAFC" if ri % 2 == 0 else "#FFFFFF"
+            svg += (f'<rect x="{x0:.1f}" y="{cy:.1f}" width="{width:.1f}"'
+                    f' height="{RH}" fill="{bg}"/>\n')
+            for ci, val in enumerate(row[:n_cols]):
+                tx = x0 + ci * col_w + col_w / 2
+                svg += (f'<text x="{tx:.1f}" y="{cy + RH/2:.1f}" font-size="12"'
+                        f' fill="#334155" text-anchor="middle" dominant-baseline="central"'
+                        f' font-family="system-ui,-apple-system,sans-serif">{esc(val)}</text>\n')
+            cy += RH
+        return f'<g id="{tbl_id}">\n{svg}</g>\n', total_h
+
+    # ── アイテムに x_pct / y_pct があるか確認 ──
+    blocks    = data.get("blocks") or []
+    title     = data.get("title", "")
+    has_coord = any(
+        item.get("x_pct") is not None and item.get("y_pct") is not None
+        for b in blocks if b.get("type") == "section"
+        for item in (b.get("items") or [])
+    )
+
+    body_svg  = ""
+    sec_idx   = 0
+    tbl_idx   = 0
+
+    if has_coord:
+        # ══ 空間モード：x_pct / y_pct で元の配置を再現 ══
+        # ホワイトボード全体のキャンバスに付箋を配置する
+        WB_PAD  = 32   # ホワイトボード余白
+        WB_X    = WB_PAD
+        WB_Y    = PAGE_PAD + 56   # タイトル分を下げる
+        WB_W    = CANVAS_W - WB_PAD * 2
+        WB_H    = CANVAS_H - WB_Y - WB_PAD
+        total_canvas_h = CANVAS_H
+
+        # ホワイトボード背景
+        body_svg += (f'<rect x="{WB_X}" y="{WB_Y}" width="{WB_W}" height="{WB_H}"'
+                     f' rx="12" fill="#FAFAFA" stroke="#E5E7EB" stroke-width="2"/>\n')
+
+        for bi, block in enumerate(blocks):
+            if block.get("type") == "section":
+                for ii, item in enumerate(block.get("items") or []):
+                    xp  = item.get("x_pct", 50)
+                    yp  = item.get("y_pct", 50)
+                    cx  = WB_X + WB_W * xp / 100
+                    cy  = WB_Y + WB_H * yp / 100
+                    # 端からはみ出さないようにクランプ
+                    cx  = max(WB_X + STICKY_W/2 + 4,
+                              min(WB_X + WB_W - STICKY_W/2 - 4, cx))
+                    cy  = max(WB_Y + STICKY_H/2 + 4,
+                              min(WB_Y + WB_H - STICKY_H/2 - 4, cy))
+                    fill, stroke = item_colors(item, sec_idx)
+                    body_svg += svg_sticky(cx, cy, item.get("text", ""),
+                                           fill, stroke, f"item-{bi}-{ii}")
+                sec_idx += 1
+            elif block.get("type") == "table":
+                # 表はホワイトボードの下に配置
+                s, h = svg_table(block, WB_X, WB_Y + WB_H + SEC_GAP,
+                                 WB_W, f"table-{tbl_idx}")
+                body_svg += s
+                total_canvas_h = WB_Y + WB_H + SEC_GAP + h + WB_PAD
+                tbl_idx += 1
+    else:
+        # ══ グリッドモード（フォールバック）：セクション単位で整列 ══
+        total_canvas_h = PAGE_PAD + 56
+
+        def grid_section(sec: dict, x0: float, width: float,
+                         y: float, si: int) -> tuple[str, float]:
+            heading = (sec.get("heading") or "").strip()
+            items   = sec.get("items") or []
+            # セクション見出しバーの色は最初のアイテムの色か、パレットから
+            _hf, _hs = _STICKY_PALETTE[si % len(_STICKY_PALETTE)]
+            per_row = max(1, int((width - SEC_PAD * 2 + GAP) / (STICKY_W + GAP)))
+            n_rows  = (len(items) + per_row - 1) // max(per_row, 1) if items else 0
+            items_h = n_rows * (STICKY_H + GAP) - (GAP if n_rows else 0)
+            sec_h   = SEC_PAD + (SEC_HDR_H if heading else 0) + items_h + SEC_PAD
+            bg  = (f'<rect x="{x0:.1f}" y="{y:.1f}" width="{width:.1f}"'
+                   f' height="{sec_h}" rx="10" fill="#F8F8F8"'
+                   f' stroke="#E0E0E0" stroke-width="1"/>\n')
+            hdr = ""
+            if heading:
+                bg  += (f'<rect x="{x0:.1f}" y="{y:.1f}" width="{width:.1f}"'
+                        f' height="{SEC_HDR_H}" rx="10" fill="{_hs}" opacity="0.18"/>\n')
+                hdr  = (f'<text x="{x0 + 14}" y="{y + SEC_HDR_H * 0.68:.1f}"'
+                        f' font-size="13" font-weight="bold" fill="{_hs}"'
+                        f' font-family="system-ui,-apple-system,sans-serif">{esc(heading)}</text>\n')
+            items_y = y + SEC_PAD + (SEC_HDR_H if heading else 0)
+            stickies = ""
+            for i, item in enumerate(items):
+                row     = i // per_row
+                col     = i % per_row
+                cx      = x0 + SEC_PAD + col * (STICKY_W + GAP) + STICKY_W / 2
+                cy      = items_y + row * (STICKY_H + GAP) + STICKY_H / 2
+                f, s    = item_colors(item, si)   # 実物色を優先
+                stickies += svg_sticky(cx, cy, item.get("text", ""),
+                                       f, s, f"item-{si}-{i}")
+            return f'<g id="section-{si}">\n{bg}{hdr}{stickies}</g>\n', sec_h
+
+        col2_secs  = [b for b in blocks if b.get("type") == "section" and b.get("column") == 2]
+        has_two    = bool(col2_secs)
+        cur_y      = PAGE_PAD + 56
+
+        if has_two:
+            col1_list = [b for b in blocks if b.get("type") == "section" and b.get("column", 1) != 2]
+            col2_list  = col2_secs
+            col_w      = (INNER_W - SEC_GAP) / 2
+            left_y = right_y = cur_y
+            for sec in col1_list:
+                s, h = grid_section(sec, PAGE_PAD, col_w, left_y, sec_idx)
+                body_svg += s; left_y += h + SEC_GAP; sec_idx += 1
+            for sec in col2_list:
+                s, h = grid_section(sec, PAGE_PAD + col_w + SEC_GAP, col_w, right_y, sec_idx)
+                body_svg += s; right_y += h + SEC_GAP; sec_idx += 1
+            cur_y = max(left_y, right_y)
+        else:
+            for block in blocks:
+                if block.get("type") == "section":
+                    s, h = grid_section(block, PAGE_PAD, INNER_W, cur_y, sec_idx)
+                    body_svg += s; cur_y += h + SEC_GAP; sec_idx += 1
+                elif block.get("type") == "table":
+                    s, h = svg_table(block, PAGE_PAD, cur_y, INNER_W, f"table-{tbl_idx}")
+                    body_svg += s; cur_y += h + SEC_GAP; tbl_idx += 1
+
+        total_canvas_h = cur_y + PAGE_PAD
+
+    # ── タイトル ──
+    title_svg = ""
+    if title:
+        title_svg = (f'<text x="{PAGE_PAD}" y="{PAGE_PAD + 38}" font-size="22"'
+                     f' font-weight="bold" fill="#1E1B4B"'
+                     f' font-family="system-ui,-apple-system,sans-serif">{esc(title)}</text>\n')
+
+    svg_doc = f"""<svg width="{CANVAS_W}" height="{total_canvas_h}" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <filter id="dropshadow" x="-10%" y="-10%" width="120%" height="120%">
+    <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.12"/>
+  </filter>
+</defs>
+<rect width="{CANVAS_W}" height="{total_canvas_h}" fill="#FFFFFF"/>
+<g id="title">{title_svg}</g>
+{body_svg}
+</svg>"""
+    return svg_doc.encode("utf-8")
 
 
 def generate_html(data: dict) -> bytes:
@@ -1564,6 +1844,22 @@ if "extracted" in st.session_state:
             data=pptx_bytes,
             file_name=f"パシャッと_{ts}.pptx",
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            use_container_width=True,
+        )
+
+    # ── Figma 用 SVG ダウンロード ──
+    if extracted:
+        st.markdown(
+            "<div style='font-size:0.9rem; color:#0EA5E9; margin:0.8rem 0 0.4rem;"
+            " font-weight:600;'>Figma・イラストレーター用</div>",
+            unsafe_allow_html=True)
+        preview_bytes = st.session_state.get("_preview_bytes")
+        svg_bytes = generate_svg(extracted, preview_bytes=preview_bytes)
+        st.download_button(
+            label="📌 ポストイット配置をSVGで保存する（Figma対応）",
+            data=svg_bytes,
+            file_name=f"パシャッと_{ts}.svg",
+            mime="image/svg+xml",
             use_container_width=True,
         )
 
