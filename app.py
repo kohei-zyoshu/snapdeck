@@ -358,7 +358,7 @@ STEP3: 出現順に blocks 配列へ記録する。
   ・2列構成なら左側を column:1、右側を column:2 とする
 
 【返却JSON形式】
-"title":"タイトル","blocks":[{"type":"section","heading":"見出し（なければ空文字）","column":1,"items":[{"text":"大見出し","type":"heading","shape":"none","color":"black","bold":true,"x_pct":25,"y_pct":10},{"text":"箇条書き","type":"bullet","shape":"none","color":"black","bold":false,"x_pct":25,"y_pct":25}]},{"type":"table","headers":["列1","列2"],"rows":[["値1","値2"]]}]}
+"title":"タイトル","blocks":[{"type":"section","heading":"見出し（なければ空文字）","column":1,"items":[{"text":"大見出し","type":"heading","shape":"none","color":"black","bold":true,"x_pct":25,"y_pct":10},{"text":"箇条書き","type":"bullet","shape":"none","color":"black","bold":false,"x_pct":25,"y_pct":25}]},{"type":"table","headers":["列1","列2"],"rows":[["値1","値2"]]}],"lines":[{"x1_pct":10,"y1_pct":50,"x2_pct":30,"y2_pct":50,"color":"black","style":"solid","type":"line"}]}
 
 【必須ルール】
 - title はスライドヘッダー専用（blocks の items に含めない）
@@ -377,6 +377,12 @@ STEP3: 出現順に blocks 配列へ記録する。
   ★重要: 付箋（ポストイット）の上に書かれた文字のみ実際の付箋色（yellow/pink/blue等）を設定
   ★例: ホワイトボードに書いた列ヘッダー・日付・タイトルは bg_color:"none"
 - table の headers: 見出し行がない場合は []
+- lines: ホワイトボード上に描かれた線・矢印（テキストや付箋の外にある線のみ）を配列で記録
+  type: line（直線）/ arrow（片方向矢印、x2/y2 側が矢じり）/ double_arrow（両方向矢印）
+  style: solid（実線）/ dashed（破線）
+  color: 線のペン色（black / blue / red 等）
+  x1_pct/y1_pct: 始点の位置（0〜100）、x2_pct/y2_pct: 終点の位置（0〜100）
+  線がない場合は lines:[] とする
 - 画像内のすべての文字を漏れなく・正確に読む（推測・省略・合体禁止）
 - 読み取れなかった・自信のない文字は [?] で示す（例: "田中[?]"、"合計[?]円"）
 - 必ず { で始まる JSONのみ返す（説明文・コードブロック・前置き不要）"""
@@ -411,6 +417,14 @@ def _normalize_blocks(data: dict) -> dict:
                         v = item.get(key)
                         if v is not None:
                             item[key] = max(0, min(100, int(v)))
+        # lines の正規化
+        if data.get("lines") is None:
+            data["lines"] = []
+        for ln in data["lines"]:
+            for key in ("x1_pct", "y1_pct", "x2_pct", "y2_pct"):
+                v = ln.get(key)
+                if v is not None:
+                    ln[key] = max(0, min(100, int(v)))
         return data
 
     # ── 旧フォーマット（sections + tables）→ blocks に変換 ──
@@ -934,6 +948,64 @@ _STICKY_PALETTE = [
     ("#E0F2F1", "#004D40"),  # deep teal
 ]
 
+# ── 付箋背景色マップ: bg_color → (fill, stroke) ──
+BG_COLOR_MAP: dict[str, tuple[str, str]] = {
+    "yellow": ("#FFF9C4", "#F9A825"),
+    "pink":   ("#FCE4EC", "#E91E63"),
+    "red":    ("#FFEBEE", "#C62828"),
+    "blue":   ("#E3F2FD", "#1565C0"),
+    "green":  ("#C8E6C9", "#2E7D32"),
+    "orange": ("#FFF3E0", "#E65100"),
+    "purple": ("#EDE7F6", "#4527A0"),
+    "white":  ("#FFFFFF", "#9E9E9E"),
+    "gray":   ("#FAFAFA", "#616161"),
+    "brown":  ("#EFEBE9", "#4E342E"),
+}
+
+# ── ペン色マップ: color → hex ──
+PEN_COLOR_MAP: dict[str, str] = {
+    "black":  "#1A1A1A",
+    "blue":   "#1565C0",
+    "red":    "#C62828",
+    "green":  "#2E7D32",
+    "purple": "#4527A0",
+    "pink":   "#AD1457",
+    "orange": "#E65100",
+    "brown":  "#4E342E",
+    "gray":   "#616161",
+    "white":  "#FFFFFF",
+}
+
+
+def pen_color_hex(item: dict) -> str:
+    """item の color フィールドからペン色 hex を返す（未指定は黒）"""
+    return PEN_COLOR_MAP.get((item.get("color") or "black").lower(), "#1A1A1A")
+
+
+def item_bg_colors(item: dict, palette_idx: int) -> tuple[str, str]:
+    """item の bg_color を (fill, stroke) へ変換。未登録はパレットから割り当て"""
+    bg = (item.get("bg_color") or "none").lower()
+    return BG_COLOR_MAP.get(bg, _STICKY_PALETTE[palette_idx % len(_STICKY_PALETTE)])
+
+
+def svg_esc(t: str) -> str:
+    """SVG テキスト用 XML エスケープ"""
+    return (str(t).replace("&", "&amp;").replace("<", "&lt;")
+                  .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def svg_wrap_text(text: str, max_ch: int = 18) -> list[str]:
+    """テキストを max_ch 文字で折り返し、最大4行に収める"""
+    t, lines = str(text), []
+    while t:
+        lines.append(t[:max_ch])
+        t = t[max_ch:]
+        if len(lines) >= 4:
+            if t:
+                lines[-1] = lines[-1][:-1] + "…"
+            break
+    return lines
+
 
 def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
     """ホワイトボード・ポストイットの内容をFigmaで編集可能なSVGとして出力する。
@@ -964,60 +1036,11 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
     PAGE_PAD  = 48
     INNER_W   = CANVAS_W - PAGE_PAD * 2
 
-    # 実物のポストイット色 → SVG fill/stroke マッピング
-    _BG_MAP = {
-        "yellow": ("#FFF9C4", "#F9A825"),
-        "pink":   ("#FCE4EC", "#E91E63"),
-        "red":    ("#FFEBEE", "#C62828"),
-        "blue":   ("#E3F2FD", "#1565C0"),
-        "green":  ("#C8E6C9", "#2E7D32"),
-        "orange": ("#FFF3E0", "#E65100"),
-        "purple": ("#EDE7F6", "#4527A0"),
-        "white":  ("#FFFFFF", "#9E9E9E"),
-        "gray":   ("#FAFAFA", "#616161"),
-        "brown":  ("#EFEBE9", "#4E342E"),
-    }
-
-    # ペン・インク色 → SVG テキスト fill マッピング
-    _PEN_MAP = {
-        "black":  "#1A1A1A",
-        "blue":   "#1565C0",
-        "red":    "#C62828",
-        "green":  "#2E7D32",
-        "purple": "#4527A0",
-        "pink":   "#AD1457",
-        "orange": "#E65100",
-        "brown":  "#4E342E",
-        "gray":   "#616161",
-        "white":  "#FFFFFF",
-    }
-
-    def pen_color(item: dict) -> str:
-        """color フィールドからペン色 hex を返す。未指定は黒"""
-        c = (item.get("color") or "black").lower()
-        return _PEN_MAP.get(c, "#1A1A1A")
-
-    def item_colors(item: dict, sec_idx: int) -> tuple[str, str]:
-        """bg_color フィールドがあれば実物色を使い、なければパレットから割り当て"""
-        bg = (item.get("bg_color") or "none").lower()
-        if bg in _BG_MAP:
-            return _BG_MAP[bg]
-        return _STICKY_PALETTE[sec_idx % len(_STICKY_PALETTE)]
-
-    def esc(t: str) -> str:
-        return (str(t).replace("&", "&amp;").replace("<", "&lt;")
-                      .replace(">", "&gt;").replace('"', "&quot;"))
-
-    def text_lines(text: str, max_ch: int = 18) -> list[str]:
-        t, lines = str(text), []
-        while t:
-            lines.append(t[:max_ch])
-            t = t[max_ch:]
-            if len(lines) >= 4:
-                if t:
-                    lines[-1] = lines[-1][:-1] + "…"
-                break
-        return lines
+    # モジュールレベルの関数をローカルエイリアスで参照（クロージャ内で見やすくするため）
+    esc        = svg_esc
+    text_lines = svg_wrap_text
+    pen_color  = pen_color_hex
+    item_colors = item_bg_colors
 
     def svg_sticky(cx: float, cy: float, text: str,
                    fill: str, stroke: str, item_id: str,
@@ -1200,6 +1223,35 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
                 body_svg += s
                 total_canvas_h = WB_Y + WB_H + SEC_GAP + h + WB_PAD
                 tbl_idx += 1
+
+        # ── 線・矢印の描画（付箋より下のレイヤーに挿入）──
+        lines_svg = ""
+        for li, ln in enumerate(data.get("lines") or []):
+            lx1 = WB_X + WB_W * snap_x(ln.get("x1_pct", 0)) / 100
+            ly1 = WB_Y + WB_H * ln.get("y1_pct", 0) / 100
+            lx2 = WB_X + WB_W * snap_x(ln.get("x2_pct", 100)) / 100
+            ly2 = WB_Y + WB_H * ln.get("y2_pct", 0) / 100
+            lhex   = PEN_COLOR_MAP.get((ln.get("color") or "black").lower(), "#1A1A1A")
+            ltype  = (ln.get("type") or "line").lower()
+            lstyle = (ln.get("style") or "solid").lower()
+
+            dash_attr  = ' stroke-dasharray="8,4"' if lstyle == "dashed" else ""
+            marker_id  = f"ah-{lhex.lstrip('#')}"
+            end_attr   = f' marker-end="url(#{marker_id})"'    if ltype in ("arrow", "double_arrow") else ""
+            start_attr = f' marker-start="url(#{marker_id})"'  if ltype == "double_arrow" else ""
+
+            lines_svg += (
+                f'<line id="line-{li}" x1="{lx1:.1f}" y1="{ly1:.1f}"'
+                f' x2="{lx2:.1f}" y2="{ly2:.1f}"'
+                f' stroke="{lhex}" stroke-width="2"{dash_attr}'
+                f'{start_attr}{end_attr} stroke-linecap="round"/>\n'
+            )
+        # 線をホワイトボード背景の直後・付箋の直前に挿入
+        body_svg = body_svg.replace(
+            f'<rect x="{WB_X}" y="{WB_Y}"',
+            f'<g id="lines">\n{lines_svg}</g>\n<rect x="{WB_X}" y="{WB_Y}"',
+            1,
+        )
     else:
         # ══ グリッドモード（フォールバック）：セクション単位で整列 ══
         total_canvas_h = PAGE_PAD + 56
@@ -1271,11 +1323,21 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
                      f' font-weight="bold" fill="#1E1B4B"'
                      f' font-family="system-ui,-apple-system,sans-serif">{esc(title)}</text>\n')
 
+    # ── 矢じりマーカー定義（各ペン色ぶん）──
+    _ARROW_COLORS = list(PEN_COLOR_MAP.values()) + ["#1A1A1A"]
+    _marker_defs  = "\n".join(
+        f'  <marker id="ah-{hex_col.lstrip("#")}" markerWidth="8" markerHeight="6"'
+        f' refX="7" refY="3" orient="auto" markerUnits="strokeWidth">'
+        f'<path d="M0,0 L0,6 L8,3 z" fill="{hex_col}"/></marker>'
+        for hex_col in dict.fromkeys(_ARROW_COLORS)  # deduplicate
+    )
+
     svg_doc = f"""<svg width="{CANVAS_W}" height="{total_canvas_h}" xmlns="http://www.w3.org/2000/svg">
 <defs>
   <filter id="dropshadow" x="-10%" y="-10%" width="120%" height="120%">
     <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.12"/>
   </filter>
+{_marker_defs}
 </defs>
 <rect width="{CANVAS_W}" height="{total_canvas_h}" fill="#FFFFFF"/>
 <g id="title">{title_svg}</g>
@@ -1896,22 +1958,6 @@ if "extracted" in st.session_state:
                         rkey = f"edit_b{bi}_r{ri}_{ci}"
                         if rkey in st.session_state:
                             block["rows"][ri][ci] = st.session_state[rkey]
-
-        # elements リストをセクションブロックから再構築
-        new_elements = []
-        for block in edited.get("blocks", []):
-            if block.get("type") != "section":
-                continue
-            for it in (block.get("items") or []):
-                idx = len(new_elements)
-                new_elements.append({
-                    "id": f"el_{idx:03d}", "type": it.get("type", "text"),
-                    "content": it.get("text", ""), "shape": it.get("shape", "none"),
-                    "style": {"color": it.get("color", "black"),
-                              "bold": it.get("bold", False)},
-                    "confidence": 1.0,
-                })
-        edited["elements"] = new_elements
 
         ip = st.session_state.get("_is_portrait", False)
         st.session_state["extracted"]  = edited
