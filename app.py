@@ -1966,31 +1966,6 @@ if "extracted" in st.session_state:
             use_container_width=True,
         )
 
-    with st.expander("読み取り内容を確認する"):
-        elmap = {el["id"]: el for el in extracted.get("elements", [])}
-        for group in extracted.get("structure", {}).get("groups", []):
-            st.markdown(f"**{group.get('label', 'グループ')}**")
-            for iid in group.get("items", []):
-                el = elmap.get(iid)
-                if el:
-                    prefix = "■ " if el.get("type") == "heading" else "・"
-                    conf   = el.get("confidence", 1.0)
-                    st.markdown(
-                        f"&nbsp;&nbsp;{prefix} {el['content']} "
-                        f"<span style='color:#9CA3AF; font-size:0.85rem;'>（確度 {conf*100:.0f}%）</span>",
-                        unsafe_allow_html=True)
-        st.markdown("---")
-        json_str = json.dumps(
-            {"バージョン": "1.0", "変換日時": datetime.now(JST).isoformat(), "データ": extracted},
-            ensure_ascii=False, indent=2,
-        )
-        st.download_button(
-            label="テキスト（JSON）で保存する",
-            data=json_str,
-            file_name=f"パシャッと_テキスト_{ts}.json",
-            mime="application/json",
-            use_container_width=True,
-        )
 
 # ── フッター ──
 st.markdown("<br>", unsafe_allow_html=True)
