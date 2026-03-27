@@ -364,7 +364,7 @@ STEP3: 出現順に blocks 配列へ記録する。
 - section の column: 左側・1列レイアウトは 1、右側コンテンツは 2
 - type: heading / bullet / text / arrow
 - shape: rect（四角囲み）/ ellipse（丸囲み）/ none（囲みなし）
-- color: black / red / blue / green / orange / purple / pink / gray / brown / yellow
+- color: ペン・インクの色（black / red / blue / green / orange / purple / pink / gray / brown）。ペンの色が判別できない場合は black
 - x_pct: そのテキスト・付箋の中心が画像左端から何%の位置か（0〜100の整数）
 - y_pct: そのテキスト・付箋の中心が画像上端から何%の位置か（0〜100の整数）
 - bg_color: 付箋・カードの背景色（yellow/pink/blue/green/orange/purple/white/none）。付箋でない場合は "none"
@@ -970,6 +970,25 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
         "brown":  ("#EFEBE9", "#4E342E"),
     }
 
+    # ペン・インク色 → SVG テキスト fill マッピング
+    _PEN_MAP = {
+        "black":  "#1A1A1A",
+        "blue":   "#1565C0",
+        "red":    "#C62828",
+        "green":  "#2E7D32",
+        "purple": "#4527A0",
+        "pink":   "#AD1457",
+        "orange": "#E65100",
+        "brown":  "#4E342E",
+        "gray":   "#616161",
+        "white":  "#FFFFFF",
+    }
+
+    def pen_color(item: dict) -> str:
+        """color フィールドからペン色 hex を返す。未指定は黒"""
+        c = (item.get("color") or "black").lower()
+        return _PEN_MAP.get(c, "#1A1A1A")
+
     def item_colors(item: dict, sec_idx: int) -> tuple[str, str]:
         """bg_color フィールドがあれば実物色を使い、なければパレットから割り当て"""
         bg = (item.get("bg_color") or "none").lower()
@@ -993,7 +1012,8 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
         return lines
 
     def svg_sticky(cx: float, cy: float, text: str,
-                   fill: str, stroke: str, item_id: str) -> str:
+                   fill: str, stroke: str, item_id: str,
+                   text_color: str = "#1A1A1A") -> str:
         x      = cx - STICKY_W / 2
         y      = cy - STICKY_H / 2
         lines  = text_lines(text)
@@ -1003,7 +1023,7 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
                   f' rx="8" fill="{fill}" stroke="{stroke}" stroke-width="1.5"'
                   f' filter="url(#dropshadow)"/>\n')
         txts   = "".join(
-            f'<text x="{cx:.1f}" y="{ty0 + i * LH:.1f}" font-size="12" fill="#333333"'
+            f'<text x="{cx:.1f}" y="{ty0 + i * LH:.1f}" font-size="12" fill="{text_color}"'
             f' text-anchor="middle" dominant-baseline="central"'
             f' font-family="system-ui,-apple-system,sans-serif">{esc(ln)}</text>\n'
             for i, ln in enumerate(lines)
@@ -1089,7 +1109,8 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
                               min(WB_Y + WB_H - STICKY_H/2 - 4, cy))
                     fill, stroke = item_colors(item, sec_idx)
                     body_svg += svg_sticky(cx, cy, item.get("text", ""),
-                                           fill, stroke, f"item-{bi}-{ii}")
+                                           fill, stroke, f"item-{bi}-{ii}",
+                                           text_color=pen_color(item))
                 sec_idx += 1
             elif block.get("type") == "table":
                 # 表はホワイトボードの下に配置
@@ -1131,7 +1152,8 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
                 cy      = items_y + row * (STICKY_H + GAP) + STICKY_H / 2
                 f, s    = item_colors(item, si)   # 実物色を優先
                 stickies += svg_sticky(cx, cy, item.get("text", ""),
-                                       f, s, f"item-{si}-{i}")
+                                       f, s, f"item-{si}-{i}",
+                                       text_color=pen_color(item))
             return f'<g id="section-{si}">\n{bg}{hdr}{stickies}</g>\n', sec_h
 
         col2_secs  = [b for b in blocks if b.get("type") == "section" and b.get("column") == 2]
