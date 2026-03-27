@@ -3,7 +3,9 @@
 """
 
 import os, io, json, base64, re, copy
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+JST = timezone(timedelta(hours=9))
 
 import streamlit as st
 from PIL import Image, ImageChops, ImageEnhance, ImageOps
@@ -364,10 +366,13 @@ STEP3: 出現順に blocks 配列へ記録する。
 - section の column: 左側・1列レイアウトは 1、右側コンテンツは 2
 - type: heading / bullet / text / arrow
 - shape: rect（四角囲み）/ ellipse（丸囲み）/ none（囲みなし）
-- color: ペン・インクの色（black / red / blue / green / orange / purple / pink / gray / brown）。ペンの色が判別できない場合は black
+- color: ペン・インクの実際の色を正確に識別する（black / red / blue / green / orange / purple / pink / gray / brown）
+  ★重要: 黒いペンは "black"、青いペン・マーカーは "blue"、赤いペンは "red" — 実際の色を忠実に設定すること
+  ★例: 青いマーカーで書かれた日付 → color:"blue" / 黒ボールペンで書かれたメモ → color:"black"
 - x_pct: そのテキスト・付箋の中心が画像左端から何%の位置か（0〜100の整数）
 - y_pct: そのテキスト・付箋の中心が画像上端から何%の位置か（0〜100の整数）
-- bg_color: 付箋・カードの背景色（yellow/pink/blue/green/orange/purple/white/none）
+- bg_color: 付箋・カードの背景色を実際の色で正確に識別する（yellow/pink/blue/green/orange/purple/white/none）
+  ★黄色と黄緑・緑の区別: 純粋な黄色（レモン色）→ "yellow" / 黄緑・ライムグリーン・緑系 → "green"
   ★重要: ホワイトボード・紙に直接書かれた文字（付箋の外のテキスト）は必ず "none"
   ★重要: 付箋（ポストイット）の上に書かれた文字のみ実際の付箋色（yellow/pink/blue等）を設定
   ★例: ホワイトボードに書いた列ヘッダー・日付・タイトルは bg_color:"none"
@@ -790,7 +795,7 @@ def generate_pptx(data: dict, is_portrait: bool = False) -> bytes:
     rect(s, 0, 0, SLIDE_W, 0.07, C_ACCENT)
 
     title    = data.get("title", "ホワイトボードメモ")
-    ts_label = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    ts_label = datetime.now(JST).strftime("%Y年%m月%d日 %H:%M")
     CONTENT_X = 0.4
     TITLE_W   = SLIDE_W - 0.8
 
@@ -965,7 +970,7 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
         "pink":   ("#FCE4EC", "#E91E63"),
         "red":    ("#FFEBEE", "#C62828"),
         "blue":   ("#E3F2FD", "#1565C0"),
-        "green":  ("#E8F5E9", "#2E7D32"),
+        "green":  ("#C8E6C9", "#2E7D32"),
         "orange": ("#FFF3E0", "#E65100"),
         "purple": ("#EDE7F6", "#4527A0"),
         "white":  ("#FFFFFF", "#9E9E9E"),
@@ -1371,7 +1376,7 @@ def generate_html(data: dict) -> bytes:
             elif b.get("type") == "table":
                 body += render_table_block(b)
 
-    ts = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    ts = datetime.now(JST).strftime("%Y年%m月%d日 %H:%M")
     html = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -1915,7 +1920,7 @@ if "extracted" in st.session_state:
         st.success("スライドを更新しました。下のボタンから保存してください。")
 
     st.markdown("---")
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(JST).strftime("%Y%m%d_%H%M%S")
 
     # ── iPhone 向け HTML ダウンロード（メイン） ──
     if html_bytes:
@@ -1976,7 +1981,7 @@ if "extracted" in st.session_state:
                         unsafe_allow_html=True)
         st.markdown("---")
         json_str = json.dumps(
-            {"バージョン": "1.0", "変換日時": datetime.now().isoformat(), "データ": extracted},
+            {"バージョン": "1.0", "変換日時": datetime.now(JST).isoformat(), "データ": extracted},
             ensure_ascii=False, indent=2,
         )
         st.download_button(
