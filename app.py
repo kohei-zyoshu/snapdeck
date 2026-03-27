@@ -367,7 +367,10 @@ STEP3: 出現順に blocks 配列へ記録する。
 - color: ペン・インクの色（black / red / blue / green / orange / purple / pink / gray / brown）。ペンの色が判別できない場合は black
 - x_pct: そのテキスト・付箋の中心が画像左端から何%の位置か（0〜100の整数）
 - y_pct: そのテキスト・付箋の中心が画像上端から何%の位置か（0〜100の整数）
-- bg_color: 付箋・カードの背景色（yellow/pink/blue/green/orange/purple/white/none）。付箋でない場合は "none"
+- bg_color: 付箋・カードの背景色（yellow/pink/blue/green/orange/purple/white/none）
+  ★重要: ホワイトボード・紙に直接書かれた文字（付箋の外のテキスト）は必ず "none"
+  ★重要: 付箋（ポストイット）の上に書かれた文字のみ実際の付箋色（yellow/pink/blue等）を設定
+  ★例: ホワイトボードに書いた列ヘッダー・日付・タイトルは bg_color:"none"
 - table の headers: 見出し行がない場合は []
 - 画像内のすべての文字を漏れなく・正確に読む（推測・省略・合体禁止）
 - 読み取れなかった・自信のない文字は [?] で示す（例: "田中[?]"、"合計[?]円"）
@@ -1013,22 +1016,43 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
 
     def svg_sticky(cx: float, cy: float, text: str,
                    fill: str, stroke: str, item_id: str,
-                   text_color: str = "#1A1A1A") -> str:
-        x      = cx - STICKY_W / 2
-        y      = cy - STICKY_H / 2
-        lines  = text_lines(text)
-        LH     = 17
-        ty0    = cy - (len(lines) - 1) * LH / 2
-        rect   = (f'<rect x="{x:.1f}" y="{y:.1f}" width="{STICKY_W}" height="{STICKY_H}"'
-                  f' rx="8" fill="{fill}" stroke="{stroke}" stroke-width="1.5"'
-                  f' filter="url(#dropshadow)"/>\n')
-        txts   = "".join(
-            f'<text x="{cx:.1f}" y="{ty0 + i * LH:.1f}" font-size="12" fill="{text_color}"'
-            f' text-anchor="middle" dominant-baseline="central"'
+                   text_color: str = "#1A1A1A",
+                   font_size: int = 12) -> str:
+        x       = cx - STICKY_W / 2
+        y       = cy - STICKY_H / 2
+        max_ch  = max(8, int(STICKY_W / font_size * 1.8))
+        lines   = text_lines(text, max_ch=max_ch)
+        LH      = font_size + 5
+        ty0     = cy - (len(lines) - 1) * LH / 2
+        rect    = (f'<rect x="{x:.1f}" y="{y:.1f}" width="{STICKY_W}" height="{STICKY_H}"'
+                   f' rx="8" fill="{fill}" stroke="{stroke}" stroke-width="1.5"'
+                   f' filter="url(#dropshadow)"/>\n')
+        txts    = "".join(
+            f'<text x="{cx:.1f}" y="{ty0 + i * LH:.1f}" font-size="{font_size}"'
+            f' fill="{text_color}" text-anchor="middle" dominant-baseline="central"'
             f' font-family="system-ui,-apple-system,sans-serif">{esc(ln)}</text>\n'
             for i, ln in enumerate(lines)
         )
         return f'<g id="{item_id}">\n{rect}{txts}</g>\n'
+
+    def svg_label(cx: float, cy: float, text: str,
+                  item_id: str,
+                  text_color: str = "#1E1B4B",
+                  font_size: int = 14,
+                  bold: bool = True) -> str:
+        """付箋なしのテキストラベル（ホワイトボード直書き・列ヘッダー等）"""
+        fw     = "700" if bold else "400"
+        lines  = text_lines(text, max_ch=20)
+        LH     = font_size + 4
+        ty0    = cy - (len(lines) - 1) * LH / 2
+        txts   = "".join(
+            f'<text x="{cx:.1f}" y="{ty0 + i * LH:.1f}" font-size="{font_size}"'
+            f' font-weight="{fw}" fill="{text_color}" text-anchor="middle"'
+            f' dominant-baseline="central"'
+            f' font-family="system-ui,-apple-system,sans-serif">{esc(ln)}</text>\n'
+            for i, ln in enumerate(lines)
+        )
+        return f'<g id="{item_id}">\n{txts}</g>\n'
 
     def svg_table(tbl: dict, x0: float, y0: float,
                   width: float, tbl_id: str) -> tuple[str, float]:
@@ -1083,13 +1107,55 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
 
     if has_coord:
         # ══ 空間モード：x_pct / y_pct で元の配置を再現 ══
-        # ホワイトボード全体のキャンバスに付箋を配置する
-        WB_PAD  = 32   # ホワイトボード余白
+        WB_PAD  = 32
         WB_X    = WB_PAD
-        WB_Y    = PAGE_PAD + 56   # タイトル分を下げる
+        WB_Y    = PAGE_PAD + 56
         WB_W    = CANVAS_W - WB_PAD * 2
         WB_H    = CANVAS_H - WB_Y - WB_PAD
         total_canvas_h = CANVAS_H
+
+        # ── x_pct をクラスタリングして列を均等配置 ──
+        # 付箋アイテム（bg_color != "none"）のx_pctだけ使って列数を検出
+        sticky_xp = [
+            item.get("x_pct", 50)
+            for b in blocks if b.get("type") == "section"
+            for item in (b.get("items") or [])
+            if item.get("x_pct") is not None
+            and (item.get("bg_color") or "none").lower() != "none"
+        ]
+        if not sticky_xp:
+            # 付箋がない場合は全アイテムのx_pctを使う
+            sticky_xp = [
+                item.get("x_pct", 50)
+                for b in blocks if b.get("type") == "section"
+                for item in (b.get("items") or [])
+                if item.get("x_pct") is not None
+            ]
+        if sticky_xp:
+            sorted_xp     = sorted(set(sticky_xp))
+            CTHR          = 10   # この%差以内を同じ列とみなす
+            col_groups: list[list[float]] = []
+            for x in sorted_xp:
+                if col_groups and x - col_groups[-1][-1] <= CTHR:
+                    col_groups[-1].append(x)
+                else:
+                    col_groups.append([x])
+            n_cols        = max(len(col_groups), 1)
+            group_means   = [sum(g) / len(g) for g in col_groups]
+            even_x_pcts   = [(i + 0.5) / n_cols * 100 for i in range(n_cols)]
+
+            def snap_x(xp: float) -> float:
+                idx = min(range(len(group_means)), key=lambda i: abs(group_means[i] - xp))
+                return even_x_pcts[idx]
+        else:
+            n_cols = 1
+            def snap_x(xp: float) -> float:
+                return xp
+
+        # ── 列数に応じてポストイットサイズを自動スケール ──
+        STICKY_W  = min(200, max(80, int(WB_W / n_cols * 0.78)))
+        STICKY_H  = max(60, int(STICKY_W * 0.60))
+        FONT_SIZE = max(9, int(12 * STICKY_W / 180))
 
         # ホワイトボード背景
         body_svg += (f'<rect x="{WB_X}" y="{WB_Y}" width="{WB_W}" height="{WB_H}"'
@@ -1098,19 +1164,29 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
         for bi, block in enumerate(blocks):
             if block.get("type") == "section":
                 for ii, item in enumerate(block.get("items") or []):
-                    xp  = item.get("x_pct", 50)
+                    xp  = snap_x(item.get("x_pct", 50))
                     yp  = item.get("y_pct", 50)
                     cx  = WB_X + WB_W * xp / 100
                     cy  = WB_Y + WB_H * yp / 100
-                    # 端からはみ出さないようにクランプ
-                    cx  = max(WB_X + STICKY_W/2 + 4,
-                              min(WB_X + WB_W - STICKY_W/2 - 4, cx))
-                    cy  = max(WB_Y + STICKY_H/2 + 4,
-                              min(WB_Y + WB_H - STICKY_H/2 - 4, cy))
-                    fill, stroke = item_colors(item, sec_idx)
-                    body_svg += svg_sticky(cx, cy, item.get("text", ""),
-                                           fill, stroke, f"item-{bi}-{ii}",
-                                           text_color=pen_color(item))
+                    bg  = (item.get("bg_color") or "none").lower()
+                    if bg == "none":
+                        # ホワイトボード直書き → テキストラベルとして描画
+                        body_svg += svg_label(cx, cy, item.get("text", ""),
+                                              item_id=f"item-{bi}-{ii}",
+                                              text_color=pen_color(item),
+                                              font_size=FONT_SIZE + 2,
+                                              bold=item.get("type") in ("heading",))
+                    else:
+                        # 付箋 → 端クランプして付箋として描画
+                        cx  = max(WB_X + STICKY_W/2 + 4,
+                                  min(WB_X + WB_W - STICKY_W/2 - 4, cx))
+                        cy  = max(WB_Y + STICKY_H/2 + 4,
+                                  min(WB_Y + WB_H - STICKY_H/2 - 4, cy))
+                        fill, stroke = item_colors(item, sec_idx)
+                        body_svg += svg_sticky(cx, cy, item.get("text", ""),
+                                               fill, stroke, f"item-{bi}-{ii}",
+                                               text_color=pen_color(item),
+                                               font_size=FONT_SIZE)
                 sec_idx += 1
             elif block.get("type") == "table":
                 # 表はホワイトボードの下に配置
