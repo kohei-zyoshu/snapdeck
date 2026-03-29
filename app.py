@@ -1048,7 +1048,7 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
                    font_size: int = 12) -> str:
         x       = cx - STICKY_W / 2
         y       = cy - STICKY_H / 2
-        max_ch  = max(8, int(STICKY_W / font_size * 1.8))
+        max_ch  = max(5, int(STICKY_W / font_size * 1.1))  # 折り返し文字数を絞って大きく見せる
         lines   = text_lines(text, max_ch=max_ch)
         LH      = font_size + 5
         ty0     = cy - (len(lines) - 1) * LH / 2
@@ -1182,8 +1182,8 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
 
         # ── 列数に応じてポストイットサイズを自動スケール ──
         STICKY_W  = min(200, max(80, int(WB_W / n_cols * 0.78)))
-        STICKY_H  = max(60, int(STICKY_W * 0.60))
-        FONT_SIZE = max(9, int(12 * STICKY_W / 180))
+        STICKY_H  = max(80, int(STICKY_W * 0.78))    # 正方形に近い比率（実物のポストイット）
+        FONT_SIZE = max(13, int(16 * STICKY_W / 180)) # より大きめのフォント
 
         # ホワイトボード背景
         body_svg += (f'<rect x="{WB_X}" y="{WB_Y}" width="{WB_W}" height="{WB_H}"'
