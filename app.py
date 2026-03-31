@@ -1403,25 +1403,49 @@ def generate_html(data: dict) -> bytes:
         "orange": "#EA580C", "purple": "#7C3AED", "pink": "#DB2777",
         "gray": "#6B7280", "brown": "#92400E",
     }
+    # 付箋の背景色マップ (fill, border)
+    BG_HTML_MAP: dict[str, tuple[str, str]] = {
+        "yellow": ("#FFF9C4", "#F9A825"),
+        "pink":   ("#FCE4EC", "#E91E63"),
+        "green":  ("#C8E6C9", "#2E7D32"),
+        "blue":   ("#E3F2FD", "#1565C0"),
+        "orange": ("#FFF3E0", "#E65100"),
+        "purple": ("#F3E5F5", "#6A1B9A"),
+        "white":  ("#FFFFFF", "#9CA3AF"),
+    }
 
     def render_item(item):
-        etype   = item.get("type", "text")
-        content = item.get("text", "")
-        shape   = item.get("shape", "none")
-        color   = CMAP.get(item.get("color", "black"), "#1E1B4B")
-        bold    = item.get("bold", False) or etype == "heading"
-        fw      = "700" if bold else "400"
+        etype    = item.get("type", "text")
+        content  = item.get("text", "")
+        shape    = item.get("shape", "none")
+        color    = CMAP.get(item.get("color", "black"), "#1E1B4B")
+        bold     = item.get("bold", False) or etype == "heading"
+        fw       = "700" if bold else "400"
+        bg_color = item.get("bg_color", "none") or "none"
+        is_bullet = etype == "bullet"
+
+        # 付箋スタイル（bg_color あり）
+        if bg_color != "none" and bg_color in BG_HTML_MAP:
+            bg_fill, bd_color = BG_HTML_MAP[bg_color]
+            inner = (f"<span class='sticky' style='background:{bg_fill};"
+                     f" border-color:{bd_color}; font-weight:{fw};'>{content}</span>")
+            return f"<li style='list-style:none; padding-left:0;'>{inner}</li>" if is_bullet else inner
+
+        # 図形バッジ（rect / ellipse）
         if shape == "rect":
-            return (f"<span class='badge rect' style='color:{color};"
-                    f" border-color:{color}; font-weight:{fw};'>{content}</span>")
+            inner = (f"<span class='badge rect' style='color:{color};"
+                     f" border-color:{color}; font-weight:{fw};'>{content}</span>")
+            return f"<li style='list-style:none; padding-left:0;'>{inner}</li>" if is_bullet else inner
         if shape == "ellipse":
-            return (f"<span class='badge ellipse' style='color:{color};"
-                    f" border-color:{color}; font-weight:{fw};'>{content}</span>")
+            inner = (f"<span class='badge ellipse' style='color:{color};"
+                     f" border-color:{color}; font-weight:{fw};'>{content}</span>")
+            return f"<li style='list-style:none; padding-left:0;'>{inner}</li>" if is_bullet else inner
+
         if etype == "heading":
             return f"<h3 style='color:{color};'>{content}</h3>"
         if etype == "arrow":
             return f"<p class='arrow'>&rarr; {content}</p>"
-        if etype == "bullet":
+        if is_bullet:
             return f"<li style='color:{color}; font-weight:{fw};'>{content}</li>"
         return f"<p style='color:{color}; font-weight:{fw};'>{content}</p>"
 
@@ -1431,12 +1455,18 @@ def generate_html(data: dict) -> bytes:
         out = ""
         if heading:
             out += f"<h2 class='sec-heading'>{heading}</h2>"
+        # セクション見出しと同じテキストの先頭 heading アイテムは重複なのでスキップ
+        start_idx = 0
+        if (items and heading
+                and items[0].get("type") == "heading"
+                and items[0].get("text", "").strip() == heading):
+            start_idx = 1
         # 箇条書きをまとめて <ul> に（インデックスを使わず状態フラグで管理）
         in_ul = False
-        for item in items:
+        for item in items[start_idx:]:
             if item.get("type") == "bullet":
                 if not in_ul:
-                    out += "<ul>"
+                    out += "<ul style='padding-left:0; margin:0.4rem 0;'>"
                     in_ul = True
                 out += render_item(item)
             else:
@@ -1517,6 +1547,9 @@ def generate_html(data: dict) -> bytes:
   .badge {{ display:inline-block; border:2px solid; border-radius:6px;
             padding:0.15rem 0.6rem; margin:0.25rem 0; font-weight:600; }}
   .badge.ellipse {{ border-radius:50px; padding:0.15rem 0.9rem; }}
+  .sticky {{ display:inline-block; border:2px solid; border-radius:8px;
+             padding:0.3rem 0.75rem; margin:0.25rem 0; font-size:0.95rem;
+             box-shadow:1px 2px 5px rgba(0,0,0,0.08); line-height:1.5; }}
   .two-col {{ display:flex; gap:1.2rem; }}
   .col {{ flex:1; min-width:0; }}
   table {{ border-collapse:collapse; width:100%; margin:1rem 0; font-size:0.9rem; }}
