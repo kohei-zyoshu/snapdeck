@@ -1182,7 +1182,7 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
     tbl_idx   = 0
 
     if has_coord:
-        # ══ 空間モード：x_pct / y_pct で元の配置を再現 ══
+        # ══ 空間モード：y帯グループ + グリッド配置で重なりを解消 ══
         WB_PAD  = 32
         WB_X    = WB_PAD
         WB_Y    = PAGE_PAD + 56
@@ -1190,94 +1190,144 @@ def generate_svg(data: dict, preview_bytes: bytes | None = None) -> bytes:
         WB_H    = CANVAS_H - WB_Y - WB_PAD
         total_canvas_h = CANVAS_H
 
-        # ── x_pct をクラスタリングして列を均等配置 ──
-        # 付箋アイテム（bg_color != "none"）のx_pctだけ使って列数を検出
-        sticky_xp = [
-            item.get("x_pct", 50)
-            for b in blocks if b.get("type") == "section"
-            for item in (b.get("items") or [])
-            if item.get("x_pct") is not None
-            and (item.get("bg_color") or "none").lower() != "none"
-        ]
-        if not sticky_xp:
-            # 付箋がない場合は全アイテムのx_pctを使う
-            sticky_xp = [
-                item.get("x_pct", 50)
-                for b in blocks if b.get("type") == "section"
-                for item in (b.get("items") or [])
-                if item.get("x_pct") is not None
-            ]
-        if sticky_xp:
-            sorted_xp     = sorted(set(sticky_xp))
-            CTHR          = 10   # この%差以内を同じ列とみなす
-            col_groups: list[list[float]] = []
-            for x in sorted_xp:
-                if col_groups and x - col_groups[-1][-1] <= CTHR:
-                    col_groups[-1].append(x)
-                else:
-                    col_groups.append([x])
-            n_cols        = max(len(col_groups), 1)
-            group_means   = [sum(g) / len(g) for g in col_groups]
-            even_x_pcts   = [(i + 0.5) / n_cols * 100 for i in range(n_cols)]
+        # ── 各セクションの平均 x/y を計算 ──
+        section_meta: list[dict] = []   # {bi, block, mx, my}
+        for bi, block in enumerate(blocks):
+            if block.get("type") != "section":
+                continue
+            items = block.get("items") or []
+            xps = [it.get("x_pct", 50) for it in items if it.get("x_pct") is not None]
+            yps = [it.get("y_pct", 50) for it in items if it.get("y_pct") is not None]
+            section_meta.append({
+                "bi": bi, "block": block,
+                "mx": sum(xps) / len(xps) if xps else 50.0,
+                "my": sum(yps) / len(yps) if yps else 50.0,
+            })
 
-            def snap_x(xp: float) -> float:
-                idx = min(range(len(group_means)), key=lambda i: abs(group_means[i] - xp))
-                return even_x_pcts[idx]
-        else:
-            n_cols = 1
-            def snap_x(xp: float) -> float:
-                return xp
+        # ── y でクラスタリング → 行グループ検出 ──
+        # 連続する y 差が 15% 以下なら同じ行とみなす（20%だと行間ギャップと混同する）
+        Y_CTHR = 15
+        sorted_sm = sorted(section_meta, key=lambda s: s["my"])
+        row_groups: list[list[dict]] = []
+        for sm in sorted_sm:
+            if row_groups and sm["my"] - row_groups[-1][-1]["my"] <= Y_CTHR:
+                row_groups[-1].append(sm)
+            else:
+                row_groups.append([sm])
 
-        # ── 列数に応じてポストイットサイズを自動スケール ──
-        STICKY_W  = min(200, max(80, int(WB_W / n_cols * 0.78)))
-        STICKY_H  = max(80, int(STICKY_W * 0.78))    # 正方形に近い比率（実物のポストイット）
-        FONT_SIZE = max(13, int(16 * STICKY_W / 180)) # より大きめのフォント
+        # 列数 = 同じ行に並ぶ最大セクション数
+        n_cols = max(len(rg) for rg in row_groups) if row_groups else 1
+        n_rows = len(row_groups)
 
-        # ホワイトボード背景
-        body_svg += (f'<rect x="{WB_X}" y="{WB_Y}" width="{WB_W}" height="{WB_H}"'
+        # 行グループ内を「column フィールド → bi 順」で並べ列番号を割り当て
+        # column=1（行ラベル）を先頭に、残りは出現順（左→右）
+        grid_pos: dict[int, tuple[int, int]] = {}   # bi -> (row_i, col_i)
+        for row_i, rg in enumerate(row_groups):
+            sorted_rg = sorted(rg, key=lambda s: (s["block"].get("column", 2), s["bi"]))
+            for col_i, sm in enumerate(sorted_rg):
+                grid_pos[sm["bi"]] = (row_i, col_i)
+
+        # ── グリッドサイズ計算 ──
+        COL_W     = WB_W / n_cols
+        STICKY_W  = min(200, max(70, int(COL_W * 0.80)))
+        STICKY_H  = max(70, int(STICKY_W * 0.75))
+        FONT_SIZE = max(12, int(15 * STICKY_W / 180))
+        HDR_H     = 38    # セクション見出し行の高さ
+        ITEM_GAP  = 8     # 付箋間ギャップ
+
+        def _count_stickies(sm: dict) -> int:
+            return sum(
+                1 for it in sm["block"].get("items", [])
+                if (it.get("bg_color") or "none").lower() != "none"
+            )
+
+        def _row_h(rg: list[dict]) -> float:
+            mx = max((_count_stickies(sm) for sm in rg), default=0)
+            return HDR_H + mx * (STICKY_H + ITEM_GAP) + ITEM_GAP * 2
+
+        row_heights = [_row_h(rg) for rg in row_groups]
+        total_grid_h = sum(row_heights)
+
+        # 高さが WB_H を超える場合は STICKY_H を圧縮
+        if total_grid_h > WB_H and n_rows > 0:
+            extra_per_row = HDR_H + ITEM_GAP * 3
+            avail = (WB_H - extra_per_row * n_rows) / n_rows
+            max_st = max(
+                (_count_stickies(sm) for rg in row_groups for sm in rg), default=1
+            ) or 1
+            STICKY_H  = max(45, int(avail / max_st - ITEM_GAP))
+            FONT_SIZE = max(10, int(12 * STICKY_H / 70))
+            row_heights = [_row_h(rg) for rg in row_groups]
+
+        # 各行の y 開始位置
+        row_y_starts: list[float] = []
+        cy = float(WB_Y)
+        for rh in row_heights:
+            row_y_starts.append(cy)
+            cy += rh
+
+        # ホワイトボード背景（実際の高さに合わせて拡張）
+        actual_wb_h = max(WB_H, sum(row_heights))
+        body_svg += (f'<rect x="{WB_X}" y="{WB_Y}" width="{WB_W}"'
+                     f' height="{actual_wb_h:.1f}"'
                      f' rx="12" fill="#FAFAFA" stroke="#E5E7EB" stroke-width="2"/>\n')
 
+        # ── セクションをグリッド位置に描画 ──
+        for sm in section_meta:
+            bi    = sm["bi"]
+            block = sm["block"]
+            row_i, col_i = grid_pos.get(bi, (0, 0))
+            items = block.get("items") or []
+
+            col_cx  = WB_X + (col_i + 0.5) * COL_W
+            row_top = row_y_starts[row_i]
+
+            # 見出し（bg_color=none）と付箋に分離
+            labels   = [it for it in items if (it.get("bg_color") or "none").lower() == "none"]
+            stickies = [it for it in items if (it.get("bg_color") or "none").lower() != "none"]
+
+            # 見出しラベルを行の上部に描画
+            lbl_y = row_top + HDR_H * 0.55
+            for it in labels:
+                ii = items.index(it)
+                body_svg += svg_label(col_cx, lbl_y, it.get("text", ""),
+                                      item_id=f"item-{bi}-{ii}",
+                                      text_color=pen_color(it),
+                                      font_size=FONT_SIZE + 2,
+                                      bold=it.get("type") == "heading")
+                lbl_y += (FONT_SIZE + 4)
+
+            # 付箋を縦積みで描画（重なりなし）
+            sticky_top = row_top + HDR_H + ITEM_GAP
+            for st_i, it in enumerate(stickies):
+                ii = items.index(it)
+                cx_cl = max(WB_X + STICKY_W / 2 + 4,
+                            min(WB_X + WB_W - STICKY_W / 2 - 4, col_cx))
+                cy_st = sticky_top + STICKY_H / 2
+                fill, stroke = item_colors(it, sec_idx)
+                body_svg += svg_sticky(cx_cl, cy_st, it.get("text", ""),
+                                       fill, stroke, f"item-{bi}-{ii}",
+                                       text_color=pen_color(it),
+                                       font_size=FONT_SIZE)
+                sticky_top += STICKY_H + ITEM_GAP
+
+            sec_idx += 1
+
+        # 表はホワイトボードの下に配置
         for bi, block in enumerate(blocks):
-            if block.get("type") == "section":
-                for ii, item in enumerate(block.get("items") or []):
-                    xp  = snap_x(item.get("x_pct", 50))
-                    yp  = item.get("y_pct", 50)
-                    cx  = WB_X + WB_W * xp / 100
-                    cy  = WB_Y + WB_H * yp / 100
-                    bg  = (item.get("bg_color") or "none").lower()
-                    if bg == "none":
-                        # ホワイトボード直書き → テキストラベルとして描画
-                        body_svg += svg_label(cx, cy, item.get("text", ""),
-                                              item_id=f"item-{bi}-{ii}",
-                                              text_color=pen_color(item),
-                                              font_size=FONT_SIZE + 2,
-                                              bold=item.get("type") in ("heading",))
-                    else:
-                        # 付箋 → 端クランプして付箋として描画
-                        cx  = max(WB_X + STICKY_W/2 + 4,
-                                  min(WB_X + WB_W - STICKY_W/2 - 4, cx))
-                        cy  = max(WB_Y + STICKY_H/2 + 4,
-                                  min(WB_Y + WB_H - STICKY_H/2 - 4, cy))
-                        fill, stroke = item_colors(item, sec_idx)
-                        body_svg += svg_sticky(cx, cy, item.get("text", ""),
-                                               fill, stroke, f"item-{bi}-{ii}",
-                                               text_color=pen_color(item),
-                                               font_size=FONT_SIZE)
-                sec_idx += 1
-            elif block.get("type") == "table":
-                # 表はホワイトボードの下に配置
-                s, h = svg_table(block, WB_X, WB_Y + WB_H + SEC_GAP,
+            if block.get("type") == "table":
+                s, h = svg_table(block, WB_X, WB_Y + actual_wb_h + SEC_GAP,
                                  WB_W, f"table-{tbl_idx}")
                 body_svg += s
-                total_canvas_h = WB_Y + WB_H + SEC_GAP + h + WB_PAD
+                total_canvas_h = WB_Y + actual_wb_h + SEC_GAP + h + WB_PAD
                 tbl_idx += 1
 
         # ── 線・矢印の描画（付箋より下のレイヤーに挿入）──
         lines_svg = ""
         for li, ln in enumerate(data.get("lines") or []):
-            lx1 = WB_X + WB_W * snap_x(ln.get("x1_pct", 0)) / 100
+            lx1 = WB_X + WB_W * ln.get("x1_pct", 0) / 100
             ly1 = WB_Y + WB_H * ln.get("y1_pct", 0) / 100
-            lx2 = WB_X + WB_W * snap_x(ln.get("x2_pct", 100)) / 100
+            lx2 = WB_X + WB_W * ln.get("x2_pct", 100) / 100
             ly2 = WB_Y + WB_H * ln.get("y2_pct", 0) / 100
             lhex   = PEN_COLOR_MAP.get((ln.get("color") or "black").lower(), "#1A1A1A")
             ltype  = (ln.get("type") or "line").lower()
