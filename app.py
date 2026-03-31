@@ -388,19 +388,67 @@ STEP3: 出現順に blocks 配列へ記録する。
 - 必ず { で始まる JSONのみ返す（説明文・コードブロック・前置き不要）"""
 
 
+def _repair_truncated_json(text: str) -> str:
+    """末尾が途切れた JSON を修復する。
+    スタックで開いているブラケット/ブレースを追跡し、末尾に閉じ記号を補完する。
+    途中で切断された文字列リテラルも閉じる。
+    """
+    stack: list[str] = []
+    in_string    = False
+    escape_next  = False
+
+    for ch in text:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack and stack[-1] == ch:
+                stack.pop()
+
+    suffix = ""
+    if in_string:
+        suffix += '"'                        # 開いたままの文字列を閉じる
+    suffix += "".join(reversed(stack))       # 開いたままの {} [] を閉じる
+    return text + suffix
+
+
 def _parse_json_response(raw: str) -> dict:
-    """AI応答テキストを堅牢にJSONパースして返す。"""
+    """AI応答テキストを堅牢にJSONパースして返す。
+    失敗時は末尾切断とみなし修復を試みる。
+    """
     text = re.sub(r"```(?:json)?\s*", "", raw)
     text = re.sub(r"```", "", text).strip()
     start = text.find("{")
     end   = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    if start == -1:
         raise ValueError(f"応答にJSONが見つかりません（先頭: {raw[:200]}）")
-    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[start:end + 1])
+
+    # 末尾 } がない場合は全体を修復対象にする
+    body = text[start:(end + 1) if end > start else len(text)]
+    body = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", body)
+
+    # ① そのままパース
     try:
-        return json.loads(text)
+        return json.loads(body)
+    except json.JSONDecodeError:
+        pass
+
+    # ② 末尾切断の修復を試みる
+    repaired = _repair_truncated_json(body)
+    try:
+        return json.loads(repaired)
     except json.JSONDecodeError as e:
-        raise ValueError(f"JSON解析エラー: {e}\n先頭: {text[:200]}")
+        raise ValueError(f"JSON解析エラー: {e}\n先頭: {body[:200]}")
 
 
 def _normalize_blocks(data: dict) -> dict:
@@ -463,7 +511,7 @@ def analyze_with_claude(img_data: str, media_type: str, api_key: str,
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model=model,
-        max_tokens=3000,
+        max_tokens=8192,        # 大型ホワイトボード対応（旧3000は切断頻発）
         temperature=0,          # 決定論的出力でJSON崩れを防ぐ
         messages=[
             {"role": "user", "content": [
